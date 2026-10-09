@@ -23,7 +23,16 @@ try {
   // tap START RUN with a real touch
   const btn = await page.evaluate(() => { const h = window.TDR.hot()[0]; const sc = scale, ox = offX, oy = offY; return { x: ox + (h.x + h.w / 2) * sc, y: oy + (h.y + h.h / 2) * sc }; });
   await page.touchscreen.tap(btn.x, btn.y); await sleep(400);
-  const st = await page.evaluate(() => window.TDR.state); console.log('state after tap start:', st); if (st !== 'play') fail++;
+  let st = await page.evaluate(() => window.TDR.state); console.log('state after tap START RUN:', st); if (st !== 'select') fail++;
+  await page.screenshot({ path: OUT + '/01b-select.png' });
+  // swipe the class carousel with a real touch drag (right->left = next class), then start from the card button
+  const i0 = await page.evaluate(() => TDR.sel.idx);
+  { const tt = await page.touchscreen.touchStart(300, 300); await tt.move(200, 300); await tt.move(100, 300); await tt.end(); await sleep(500); }
+  const i1 = await page.evaluate(() => TDR.sel.idx); console.log('class swipe', i0, '->', i1); if (i1 !== i0 + 1) fail++;
+  const sb = await page.evaluate(() => { const h = TDR.hot().find(h => /^START AS/.test(h.label)); return { x: offX + (h.x + h.w / 2) * scale, y: offY + (h.y + h.h / 2) * scale }; });
+  await page.touchscreen.tap(sb.x, sb.y); await sleep(400);
+  st = await page.evaluate(() => window.TDR.state); console.log('state after START AS:', st); if (st !== 'play') fail++;
+  const saved = await page.evaluate(() => ({ ls: localStorage.getItem('neon_vault_class_v1'), cls: G.P.cls })); console.log('class saved', saved); if (saved.ls !== saved.cls || saved.cls !== 'breacher') fail++;
   // joystick drag with touch
   const t = await page.touchscreen.touchStart(150, 650);
   await t.move(200, 650); await sleep(600);
@@ -125,16 +134,19 @@ try {
     chk('landscape detected, canvas fills screen', st.land && Math.abs(st.LW * st.scale - st.w) < 3 && Math.abs(st.LH * st.scale - st.h) < 3, st);
     const hb = await lp.evaluate(() => { const h = TDR.hot()[0]; return { x: offX + (h.x + h.w / 2) * scale, y: offY + (h.y + h.h / 2) * scale }; });
     await lp.touchscreen.tap(hb.x, hb.y); await sleep(300);
+    chk('landscape: START RUN opens class select', (await lp.evaluate(() => TDR.state)) === 'select');
+    const sb2 = await lp.evaluate(() => { const h = TDR.hot().find(h => /^START AS/.test(h.label)); return { x: offX + (h.x + h.w / 2) * scale, y: offY + (h.y + h.h / 2) * scale }; });
+    await lp.touchscreen.tap(sb2.x, sb2.y); await sleep(300);
     chk('start run in landscape', (await lp.evaluate(() => TDR.state)) === 'play');
     await lp.evaluate(() => { for (let i = 0; i < 30; i++) TDR.update(1 / 60); G.enemies.length = 0; G.roomState = 'idle'; });
     const geo = await lp.evaluate(() => {
       const L = layout(), A = ARENA, out = {}; const inside = r => r.x >= 0 && r.y >= 0 && r.x + r.w <= LW && r.y + r.h <= LH;
       const circ = c => ({ x: c.x - c.r, y: c.y - c.r, w: c.r * 2, h: c.r * 2 });
-      const rects = { pause: L.pause, slot0: L.slot[0], slot1: L.slot[1], dash: circ(L.dash), spec: circ(L.spec) };
+      const rects = { pause: L.pause, slot0: L.slot[0], slot1: L.slot[1], dash: circ(L.dash), skill: circ(L.skill) };
       out.inside = Object.keys(rects).every(k => inside(rects[k]));
       const ov = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
       out.noArenaOverlap = Object.keys(rects).every(k => !ov(rects[k], A)) && !ov(L.pickBox.single, A) && L.pickBox.swap.every(r => !ov(r, A));
-      out.right = L.dash.x > LW / 2 && L.spec.x > LW / 2 && L.pickBox.single.x > LW / 2;
+      out.right = L.dash.x > LW / 2 && L.skill.x > LW / 2 && L.pickBox.single.x > LW / 2;
       out.pauseCorner = L.pause.x + L.pause.w > LW - 60 && L.pause.y < 40;
       // safe area: nothing within the 47px (css) side insets / 21px bottom inset
       const sx = 47 / scale, sb = 21 / scale; out.safe = Object.keys(rects).concat([]).every(k => rects[k].x >= sx - 0.5 && rects[k].x + rects[k].w <= LW - sx + 0.5 && rects[k].y + rects[k].h <= LH - sb + 0.5) && A.x >= sx - 0.5 && A.y + A.h <= LH - sb + 0.5;
@@ -174,6 +186,98 @@ try {
     await lp.screenshot({ path: OUT + '/08-desktop-wide.png' });
     console.log('errors landscape:', e4); if (e4.length) fail++;
     await lp.close();
+  }
+
+  // ---------- classes: select persistence, every class starts a run, passives and skills work
+  {
+    const cp = await browser.newPage(); const e5 = []; const chk = (name, ok, extra) => { console.log((ok ? 'ok   ' : 'FAIL ') + name, ok ? '' : JSON.stringify(extra || '')); if (!ok) fail++; };
+    cp.on('pageerror', e => e5.push(e.message)); cp.on('console', m => { if (m.type() === 'error') e5.push(m.text()); });
+    await cp.setViewport({ width: 390, height: 844, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+    await cp.goto(APP + '?god=1', { waitUntil: 'load' }); await sleep(300);
+    chk('7 classes, no Siphon', await cp.evaluate(() => TDR.CLASSES.length === 7 && !TDR.CLASSES.some(c => /siphon/i.test(c.name + c.id + c.skill))));
+    const START = { runner: 'pistol', breacher: 'shotgun', phantom: 'sniper', overclock: 'smg', daemon: 'crossbow', blackout: 'launcher' };
+    const ids = await cp.evaluate(() => TDR.CLASSES.map(c => c.id));
+    for (const id of ids) {
+      const r = await cp.evaluate(async (id) => {
+        const T = window.TDR; T.newRun(id); const g = T.G, p = g.player, out = { id };
+        out.start = p.slots[0].type; out.hasSkillBtn = !!layout().skill; out.crit = g.P.crit;
+        for (let i = 0; i < 90; i++) T.update(1 / 60);              // let wave 1 spawn in & start shooting
+        // dash plain/identical: same cooldown for all classes
+        out.dashCd = g.P.dashCd;
+        const before = { bullets: g.bullets.length, hp: p.hp, dashCd: p.dashCd };
+        const used = T.useSkill(); out.used = used; out.skillT = p.skillT;
+        for (let i = 0; i < 70; i++) T.update(1 / 60);
+        T.render();
+        out.turrets = g.turrets.length; out.decoys = g.decoys.length; out.od = p.overdrive; out.haste = p.haste;
+        if (id === 'daemon') { const tu = g.turrets[0]; out.turretFx = tu ? JSON.stringify(tu.w.afx) === JSON.stringify(p.slots[p.active].afx) : false; out.turretLife = tu ? tu.max : 0; }
+        if (id === 'overclock') out.hp = p.hp;
+        if (id === 'breacher') out.stunned = 0;
+        if (id === 'glitch') { out.glitchNow = p.slots[0].name; }
+        // skill goes on cooldown and the button state reflects it; skill key via keyboard
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'q' }));
+        out.state = T.state; return out;
+      }, id);
+      const ok = r.hasSkillBtn && (id === 'glitch' || r.start === START[id]) && r.dashCd === 1.4 && (r.used || id === 'blackout') && r.state === 'play';
+      chk('class ' + id + ' starts with ' + r.start + ' and fires its skill', ok, r);
+    }
+    // passives
+    let r = await cp.evaluate(() => { TDR.newRun('runner'); return { crit: G.P.crit }; }); chk('runner passive: +crit', Math.abs(r.crit - 0.2) < 1e-9, r);
+    r = await cp.evaluate(() => { TDR.newRun('breacher'); const g = G; g.roomState = 'idle'; g.pillars.length = 0; g.enemies.length = 0; const p = g.player; p.slots[0].dmg = 10; g.enemies.push({ type: 'chaser', x: p.x, y: p.y - 90, vx: 0, vy: 0, r: 10, hp: 1e6, max: 1e6, speed: 0, dmg: 0, spawnT: 0, hitT: 0, atk: 9, cd: 99, burn: 0, burnDps: 0, burnTick: 0, slow: 0, state: 0, st: 0, ang: 0, dead: false, wob: 0 });
+      p.cd = 0; p.tgtT = 0; TDR.update(1 / 60); return { pierce: Math.min(...g.bullets.map(b => b.pierce)), n: g.bullets.length }; });
+    chk('breacher passive: pellets pierce one enemy', r.n > 0 && r.pierce >= 1, r);
+    r = await cp.evaluate(() => { TDR.newRun('phantom'); const g = G, p = g.player; g.roomState = 'idle'; g.pillars.length = 0; g.enemies.length = 0; p.slots[0].dmg = 20; const base = (() => { const n = g.bullets.length; return n; })(); window.dispatchEvent(new KeyboardEvent('keydown', { key: ' ' })); const armed = p.ambush; for (let i = 0; i < 20; i++) TDR.update(1 / 60);
+      g.enemies.push({ type: 'chaser', x: p.x, y: p.y - 150, vx: 0, vy: 0, r: 10, hp: 1e6, max: 1e6, speed: 0, dmg: 0, spawnT: 0, hitT: 0, atk: 9, cd: 99, burn: 0, burnDps: 0, burnTick: 0, slow: 0, state: 0, st: 0, ang: 0, dead: false, wob: 0 });
+      p.tgtT = 0; p.cd = 0; const nb = g.bullets.length; TDR.update(1 / 60); const first = g.bullets[g.bullets.length - 1]; p.cd = 0; TDR.update(1 / 60); p.cd = 0; const dmgs = g.bullets.map(b => b.dmg); return { armed, first: first && first.dmg, ratio: first ? first.dmg / Math.min(...dmgs.filter(d => d > 0)) : 0, ambushLeft: p.ambush }; });
+    chk('phantom passive: first shot after dash is x3', r.armed && r.ratio > 2.5 && !r.ambushLeft, r);
+    r = await cp.evaluate(() => { TDR.newRun('overclock'); const g = G, p = g.player; g.roomState = 'idle'; g.pillars.length = 0; g.enemies.length = 0; const mk = () => { g.bullets.length = 0; p.cd = 0; g.P.crit = 0; g.enemies.length = 0; g.enemies.push({ type: 'chaser', x: p.x, y: p.y - 100, vx: 0, vy: 0, r: 10, hp: 1e6, max: 1e6, speed: 0, dmg: 0, spawnT: 0, hitT: 0, atk: 9, cd: 99, burn: 0, burnDps: 0, burnTick: 0, slow: 0, state: 0, st: 0, ang: 0, dead: false, wob: 0 }); p.tgtT = 0; TDR.update(1 / 60); return g.bullets[0] && g.bullets[0].dmg; };
+      p.hp = 100; const hi = mk(); p.hp = 20; const lo = mk(); return { hi, lo, ratio: lo / hi }; });
+    chk('overclock passive: damage rises as HP drops', r.ratio > 1.5, r);
+    r = await cp.evaluate(() => { TDR.newRun('daemon'); const g = G, p = g.player; p.skillT = 0; TDR.useSkill(); return { life: g.turrets[0].max }; }); chk('daemon passive: turrets last longer than the 8s base', r.life > 8 * 1.5, r);
+    r = await cp.evaluate(() => { TDR.newRun('daemon'); const g = G, p = g.player; g.roomState = 'idle'; g.pillars.length = 0; g.enemies.length = 0; p.slots[0] = TDR.genWeapon('pistol', 2); p.skillT = 0; TDR.useSkill(); p.x = ARENA.x + 20; p.y = ARENA.y + ARENA.h - 20; const t = g.turrets[0]; g.enemies.push({ type: 'chaser', x: t.x, y: t.y - 90, vx: 0, vy: 0, r: 10, hp: 1e6, max: 1e6, speed: 0, dmg: 0, spawnT: 0, hitT: 0, atk: 9, cd: 99, burn: 0, burnDps: 0, burnTick: 0, slow: 0, state: 0, st: 0, ang: 0, dead: false, wob: 0 }); g.bullets.length = 0; p.skillT = 99;
+      let shots = 0; for (let i = 0; i < 90; i++) { TDR.update(1 / 60); shots += g.bullets.filter(b => b.t < 0.02 && Math.hypot(b.x - t.x, b.y - t.y) < 20).length; } return { shots, hp: g.enemies[0].hp }; });
+    chk('daemon turret fires at enemies', r.hp < 1e6, r);
+    r = await cp.evaluate(() => { TDR.newRun('breacher'); const g = G, p = g.player; g.roomState = 'idle'; g.pillars.length = 0; g.enemies.length = 0; g.enemies.push({ type: 'chaser', x: p.x, y: p.y - 40, vx: 0, vy: 0, r: 10, hp: 1e6, max: 1e6, speed: 60, dmg: 0, spawnT: 0, hitT: 0, atk: 9, cd: 99, burn: 0, burnDps: 0, burnTick: 0, slow: 0, state: 0, st: 0, ang: 0, dead: false, wob: 0 }); p.skillT = 0; const e = g.enemies[0]; const y0 = e.y; TDR.useSkill(); for (let i = 0; i < 20; i++) TDR.update(1 / 60); return { stun: e.stun, knocked: y0 - e.y > 5 || e.y < y0 }; });
+    chk('breacher shockwave stuns + knocks back', r.stun > 0.5 && r.knocked, r);
+    r = await cp.evaluate(() => { TDR.newRun('phantom'); const g = G, p = g.player; g.roomState = 'idle'; g.pillars.length = 0; g.enemies.length = 0; g.enemies.push({ type: 'chaser', x: p.x + 60, y: p.y, vx: 0, vy: 0, r: 10, hp: 1e6, max: 1e6, speed: 60, dmg: 0, spawnT: 0, hitT: 0, atk: 9, cd: 99, burn: 0, burnDps: 0, burnTick: 0, slow: 0, state: 0, st: 0, ang: 0, dead: false, wob: 0 }); p.skillT = 0; TDR.useSkill(); const d = g.decoys[0]; p.x -= 120; const e = g.enemies[0]; const d0 = Math.hypot(e.x - d.x, e.y - d.y); for (let i = 0; i < 40; i++) TDR.update(1 / 60); return { toward: Math.hypot(e.x - d.x, e.y - d.y) < d0 - 15, decoy: g.decoys.length }; });
+    chk('phantom decoy attracts enemies', r.toward, r);
+    r = await cp.evaluate(() => { TDR.newRun('overclock'); const g = G, p = g.player; p.hp = 100; p.skillT = 0; TDR.useSkill(); return { hp: p.hp, od: p.overdrive }; }); chk('overclock redline: costs HP, boosts fire rate', r.hp === 85 && r.od > 4, r);
+    r = await cp.evaluate(() => { TDR.newRun('blackout'); const g = G, p = g.player; g.roomState = 'idle'; g.pillars.length = 0; g.enemies.length = 0; const mk = (x, y) => ({ type: 'chaser', x, y, vx: 0, vy: 0, r: 10, hp: 200, max: 200, speed: 0, dmg: 0, spawnT: 0, hitT: 0, atk: 9, cd: 99, burn: 0, burnDps: 0, burnTick: 0, slow: 0, state: 0, st: 0, ang: 0, dead: false, wob: 0 });
+      const cx = ARENA.x + ARENA.w / 2, cy = ARENA.y + 120; for (let i = 0; i < 5; i++) g.enemies.push(mk(cx + i * 6 - 12, cy + (i % 2) * 8)); const far = mk(ARENA.x + 30, ARENA.y + ARENA.h - 60); g.enemies.push(far); p.skillT = 0; TDR.useSkill(); for (let i = 0; i < 80; i++) TDR.update(1 / 60);
+      return { clusterHp: g.enemies.filter(e => e.y < cy + 30).map(e => Math.round(e.hp)), farHp: far.hp }; });
+    chk('blackout orbital strike hits the densest cluster, not the loner', r.clusterHp.every(h => h < 200) && r.farHp === 200, r);
+    r = await cp.evaluate(() => { TDR.newRun('glitch'); const g = G, p = g.player; p.slots[0] = TDR.genWeapon('pistol', 3); const w = p.slots[0]; let changed = false; for (let k = 0; k < 6 && !changed; k++) { const before = w.afx.join(); p.skillT = 0; TDR.useSkill(); changed = w.afx.join() !== before; }
+      const okName = w.name === (w.afx.map(a => AFFIX_BY_ID[a].adj).concat('Pistol')).join(' ');
+      g.roomState = 'clear'; TDR.setState('play'); g.doorOpen = false; g.perkDone = false; g.clearT = -1; for (let i = 0; i < 3; i++) TDR.update(1 / 60);
+      return { changed, okName, perks: g.perkOffer && g.perkOffer.length, state: TDR.state }; });
+    chk('glitch: skill rerolls affixes; 4 perk choices', r.changed && r.okName && r.perks === 4, r);
+    r = await cp.evaluate(() => { TDR.newRun('glitch'); const g = G, p = g.player; g.roomState = 'idle'; let hits = 0; for (let k = 0; k < 40; k++) { const w = TDR.genWeapon('smg', 3), before = w.afx.join(); g.items.length = 0; g.items.push({ kind: 'weapon', w, x: p.x, y: p.y, t: 1, vx: 0, vy: 0 }); TDR.update(1 / 60); TDR.pickup(1); if (w.afx.join() !== before) hits++; p.slots[1] = null; }
+      return { hits }; });
+    chk('glitch: pickups sometimes reroll an affix', r.hits > 5 && r.hits < 40, r);
+    // normal classes get 3 perk choices
+    r = await cp.evaluate(() => { TDR.newRun('runner'); const g = G; g.roomState = 'clear'; g.clearT = -1; g.perkDone = false; for (let i = 0; i < 3; i++) TDR.update(1 / 60); return { perks: g.perkOffer && g.perkOffer.length }; }); chk('other classes: 3 perk choices', r.perks === 3, r);
+    // persistence: last class remembered across reloads; Glitch selection shown on select screen
+    await cp.evaluate(() => TDR.newRun('daemon')); await cp.reload({ waitUntil: 'load' }); await sleep(300);
+    r = await cp.evaluate(() => ({ idx: TDR.sel.idx, id: TDR.CLASSES[TDR.sel.idx].id })); chk('last chosen class remembered', r.id === 'daemon', r);
+    // select screen visuals in portrait + landscape, all cards render
+    for (const [w, h, tag] of [[390, 844, 'p'], [844, 390, 'l']]) {
+      await cp.setViewport({ width: w, height: h, deviceScaleFactor: 2, isMobile: true, hasTouch: true }); await sleep(250);
+      for (let i = 0; i < 7; i++) { await cp.evaluate((i) => { TDR.setState('select'); TDR.selectClass(i); TDR.sel.pos = i; TDR.render(); }, i); if (i === 0 || i === 4 || i === 6) await cp.screenshot({ path: OUT + `/11-select-${tag}-${i}.png` }); }
+      const g2 = await cp.evaluate(() => { const hh = TDR.hot(), inside = hh.every(r => r.x >= 0 && r.x + r.w <= LW + 1 && r.y >= 0 && r.y + r.h <= LH + 1); return { n: hh.length, inside, start: hh.some(r => /^START AS/.test(r.label)) }; });
+      chk('class select ' + (tag === 'p' ? 'portrait' : 'landscape') + ': buttons on screen', g2.inside && g2.start, g2);
+      // in-run: skill button in right thumb zone, inside screen, clear of the arena, in both orientations
+      const g3 = await cp.evaluate(() => { TDR.newRun('runner'); for (let i = 0; i < 20; i++) TDR.update(1 / 60); const L = layout(), A = ARENA, s = L.skill; const ov = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+        const dist2 = Math.hypot(s.x - L.dash.x, s.y - L.dash.y) > s.r + L.dash.r - 4;
+        const sr = { x: s.x - s.r, y: s.y - s.r, w: s.r * 2, h: s.r * 2 };
+        return { right: s.x > LW / 2, inside: sr.x >= 0 && sr.y >= 0 && sr.x + sr.w <= LW && sr.y + sr.h <= LH, noOverlapDash: dist2, arenaClear: !ov(sr, A) || !land === true }; });
+      chk('skill button in thumb zone (' + tag + ')', g3.right && g3.inside && g3.noOverlapDash, g3);
+      // tap the skill button with a real touch
+      const sp = await cp.evaluate(() => { const s = layout().skill; return { x: offX + s.x * scale, y: offY + s.y * scale }; });
+      await cp.touchscreen.tap(sp.x, sp.y); await sleep(150);
+      chk('touch on skill button triggers skill (' + tag + ')', await cp.evaluate(() => G.player.skillT > 0));
+      await cp.screenshot({ path: OUT + `/12-play-${tag}.png` });
+    }
+    console.log('errors classes:', e5); if (e5.length) fail++;
+    await cp.close();
   }
 
   // death path (no god)

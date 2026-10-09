@@ -1,56 +1,55 @@
-# Loot & Lead
+# Neon Vault
 
-A short-run, loot-driven **top-down roguelike shooter** you can play with **one thumb** on your phone
-(think *Gunfire Reborn*, but 5-8 minute runs). Vanilla HTML5 canvas + JavaScript – no build step, no assets.
+A short-run, loot-driven **neon top-down roguelike shooter** you can play with **one thumb** on your phone
+(portrait or landscape) or with keyboard/mouse on desktop. Vanilla canvas, no build step.
 
-## Play
-
-Open the hosted build (see the repo description / Render URL) on your phone, or run it locally:
-
-```bash
-python3 -m http.server 8080   # or any static server
-# open http://localhost:8080
-```
+**Play:** https://top-down-roguelike.onrender.com
 
 ## Controls
 
 | Action | Touch | Desktop |
-| --- | --- | --- |
-| Move | Drag anywhere on the lower screen (floating joystick) | WASD / arrows (or click-drag) |
-| Aim & fire | Automatic – nearest enemy | Automatic |
-| Dash (i-frames) | **DASH** button, bottom right | Space / Shift |
-| Weapon special | **SPECIAL** button (named after the weapon's special) | E / Q |
-| Swap weapon | Tap a weapon slot | 1 / 2 / Tab |
-| Pause | Pause button, top right | Esc / P |
+|---|---|---|
+| Move | Drag anywhere (floating joystick) | WASD / arrows |
+| Aim / fire | Automatic | Automatic |
+| Dash | **DASH** button (same for every class) | Space / Shift |
+| Class skill | **SKILL** button with cooldown ring | Q |
+| Inspect / pick up weapon | Stand near it, tap **PICK UP** (or **SWAP SLOT 1 / 2** when both slots are full) | E (swaps into the active slot) |
+| Equip slot | Tap weapon slot | 1 / 2 / Tab |
+| Pause | Corner button | Esc / P |
 
-All buttons live in the bottom-right thumb zone; the run auto-pauses when the tab loses focus.
+Weapons on the floor are never picked up automatically and show no labels, only a rarity beam. Standing within a
+small radius of one shows an inspect card (stat deltas vs. both equipped weapons with green/red arrows, rarity,
+affix differences) plus the Pick Up / Swap buttons in the right thumb zone. Swapped-out weapons drop on the floor.
 
-## The run
+Landscape: arena fills the screen, HUD sits in the top bar, joystick on the left, buttons on the right, safe-area insets
+respected, and rotating / resizing mid-run re-lays everything out live (a rotation pauses the run).
 
-* **5 small rooms + a boss** (The Warden). Each room is 3 waves; the door opens when the room is cleared.
-* After every room: **pick 1 of 3 random perks** (move speed, crit chance/damage, drop quality, max HP, fire rate, damage,
-  dash/special cooldowns, pickup magnet, armor, healing) and open the **chest** for a guaranteed rare-or-better weapon.
-* Enemies drop weapons too (tanks most often). Walk over a weapon to pick it up; you carry **2** and can swap any time.
-* Enemies: **chaser**, **shooter**, **tank** (telegraphed charge), **swarm**, plus the multi-phase **boss**.
-* Health bars, damage numbers, crits, screen shake, particles, game-over / victory screens with **best-run stats** in `localStorage`.
+## Classes (pick on the class-select screen; last choice is remembered)
 
-## Weapons, rarities, affixes
+| Class | Start | Passive | Skill |
+|---|---|---|---|
+| Runner (cyan) | Pistol | +15% crit chance | Overload: 16-way burst, dash reset, +30% fire rate 3s |
+| Breacher (orange) | Shotgun | Pellets pierce one enemy | Shockwave: knockback + stun |
+| Phantom (violet) | Sniper | First shot after a dash deals x3 | Decoy: hologram lures enemies |
+| Overclock (red) | SMG | Damage rises as HP drops (up to +80%) | Redline: 2x fire rate 5s, costs 15 HP |
+| Daemon (green) | Crossbow | Turrets last 75% longer | Turret: copies your weapon + affixes |
+| Blackout (yellow) | Launcher | Burning / Explosive affixes 50% stronger | Orbital Strike on the densest cluster |
+| Glitch (magenta) | Random | 4 perk choices; pickups may reroll an affix | Reroll: new affixes on equipped weapon |
 
-* Types: **pistol, shotgun, SMG, sniper (piercing), crossbow (sticks, then explodes), launcher (splash)** – each with its own **special**
-  (Quickdraw, Shockwave, Overdrive, Railshot, Volley, Barrage).
-* Rarities: **common, rare, epic, legendary** (coloured glow + light beam on the floor). Higher rarity = bigger stats, more affixes (0-3).
-* 10 affixes: **ricochet, burning, chain lightning, vampiric, splitting, overcharged** (every 5th shot x3), **cursed** (+60% dmg, +35% damage taken),
-  **freezing, explosive, piercing**.
-* Names are generated from the affixes (e.g. *Burning Ricochet SMG*) and the full stats/affix text is shown when you pick one up.
-* Combos: burning + ricochet leaves **trails of fire**, burning + explosive makes blasts ignite, freezing + chain lightning arcs freeze.
+## Game
 
-## Tests
+* **5 rooms + a boss** (The Admin). Each room has 3 waves; after the room, pick 1 of 3 perks (4 for Glitch) and open the data crate.
+* Enemies: Rogue Drones, Malware swarms, ICE Turrets, Firewalls.
+* Weapons: pistol, shotgun, SMG, sniper, crossbow, launcher in 4 rarities (common to legendary) with 10 affixes
+  (ricochet, burning, chain lightning, vampiric, splitting, overcharged, cursed, freezing, explosive, piercing) and combos.
+* Look: neon vector shapes with cheap additive glow sprites, neon grid floor, scanline/vignette overlay (no shadowBlur).
 
-```bash
-npm install            # puppeteer-core (uses your local Chrome/Chromium)
-npm test               # headless load, touch joystick, full auto-played run, death path; fails on any console error
+## Dev
+
+```
+npm install            # puppeteer-core (needs a local Chrome)
+npm test               # headless: menu, class select + swipe, every class + skill, pickup flow, landscape/safe areas/live resize, full auto run, death path
+npm start              # python static server on :8080
 ```
 
-## Deploy
-
-It is a static site: publish the repo root (`.`) with no build command (see `render.yaml`).
+Deployed as a Render static site (`render.yaml`), auto-deploys on push to `main`.
