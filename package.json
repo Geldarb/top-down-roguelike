@@ -1,0 +1,8 @@
+{
+  "name": "top-down-roguelike",
+  "version": "1.0.0",
+  "description": "Loot & Lead - one-thumb top-down roguelike shooter (vanilla canvas)",
+  "private": true,
+  "scripts": { "test": "node test/smoke.mjs", "start": "python3 -m http.server 8080" },
+  "devDependencies": { "puppeteer-core": "^25.13.0" }
+}
