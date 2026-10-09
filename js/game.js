@@ -4,8 +4,11 @@
 // =====================================================================
 const cv = document.getElementById('c');
 const ctx = cv.getContext('2d', { alpha: false });
-const LW = 360;                 // logical width (fixed)
+let LW = 360;                   // logical width (360 in portrait, adaptive in landscape)
 let LH = 640;                   // logical height (adaptive)
+let land = false;               // landscape layout?
+const SA = { l: 0, t: 0, r: 0, b: 0 };   // safe-area insets in logical units
+const PICK_R = 34;              // radius (px) within which a floor weapon can be inspected / picked up
 let scale = 1, offX = 0, offY = 0, dpr = 1;
 const ARENA = { x: 12, y: 62, w: 336, h: 400 };
 const BOSS_ROOM = 6;
@@ -60,21 +63,60 @@ function sfx(name, freq, dur, type, vol, slide) {
   } catch (e) { /* audio unavailable */ }
 }
 
-// ---------------------------------------------------------------- resize / scaling
+// ---------------------------------------------------------------- resize / scaling / safe areas
+const saProbe = document.createElement('div');
+saProbe.style.cssText = 'position:fixed;left:0;top:0;width:0;height:0;visibility:hidden;pointer-events:none;' +
+  'padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px)';
+document.body.appendChild(saProbe);
+function readSafePx() {
+  const m = /[?&]safe=([\d.]+),([\d.]+),([\d.]+),([\d.]+)/.exec(location.search);   // debug override: ?safe=top,right,bottom,left (CSS px)
+  if (m) return { t: +m[1], r: +m[2], b: +m[3], l: +m[4] };
+  const cs = getComputedStyle(saProbe);
+  return { t: parseFloat(cs.paddingTop) || 0, r: parseFloat(cs.paddingRight) || 0, b: parseFloat(cs.paddingBottom) || 0, l: parseFloat(cs.paddingLeft) || 0 };
+}
 function resize() {
   dpr = Math.min(window.devicePixelRatio || 1, 2.5);
   const iw = window.innerWidth, ih = window.innerHeight;
   cv.width = Math.round(iw * dpr); cv.height = Math.round(ih * dpr);
-  if (state === 'menu' || state === 'over' || state === 'win' || !G) LH = clamp(Math.round(LW * ih / iw), 600, 780);
+  const old = { x: ARENA.x, y: ARENA.y, w: ARENA.w, h: ARENA.h }, wasLand = land;
+  land = iw > ih;
+  if (land) {
+    const ar = iw / ih;
+    LH = 400; LW = LH * ar;
+    if (LW < 600) { LW = 600; LH = LW / ar; }
+    LW = Math.round(Math.min(LW, 960)); LH = Math.round(LH);
+  } else { LW = 360; LH = clamp(Math.round(LW * ih / iw), 600, 780); }
   scale = Math.min(iw / LW, ih / LH);
   offX = (iw - LW * scale) / 2; offY = (ih - LH * scale) / 2;
+  const px = readSafePx();
+  SA.l = Math.max(0, (px.l - offX) / scale); SA.r = Math.max(0, (px.r - offX) / scale);
+  SA.t = Math.max(0, (px.t - offY) / scale); SA.b = Math.max(0, (px.b - offY) / scale);
   setArena();
+  if (joy.active) { joy.active = false; joy.mx = joy.my = 0; joy.id = null; }
+  if (G && old.w > 0 && (Math.abs(old.x - ARENA.x) + Math.abs(old.y - ARENA.y) + Math.abs(old.w - ARENA.w) + Math.abs(old.h - ARENA.h) > 0.5)) {
+    remapRun(old);
+    if (land !== wasLand && state === 'play') state = 'pause';   // orientation flipped mid-run: pause so the player can re-grip
+  }
 }
 function setArena() {
-  ARENA.x = 12; ARENA.y = 62; ARENA.w = LW - 24; ARENA.h = LH - 62 - 172;
+  if (land) { ARENA.x = SA.l + 8; ARENA.y = SA.t + 46; ARENA.w = LW - ARENA.x - SA.r - 168; ARENA.h = LH - ARENA.y - SA.b - 8; }
+  else { ARENA.x = 12 + SA.l; ARENA.y = 62 + SA.t; ARENA.w = LW - 24 - SA.l - SA.r; ARENA.h = LH - ARENA.y - 172 - SA.b; }
+}
+// live resize: map everything in the current run from the old arena rectangle to the new one
+function remapRun(o) {
+  const g = G, sx = ARENA.w / o.w, sy = ARENA.h / o.h;
+  const mx = x => ARENA.x + (x - o.x) * sx, my = y => ARENA.y + (y - o.y) * sy;
+  const mv = a => { if (a && a.x != null) { a.x = mx(a.x); a.y = my(a.y); } };
+  [g.enemies, g.bullets, g.ebullets, g.items, g.chests, g.patches, g.parts, g.nums].forEach(arr => arr.forEach(mv));
+  g.bullets.forEach(b => { if (b.stuck && b.stuck.wall) mv(b.stuck); });
+  g.fx.forEach(f => { if (f.x != null) mv(f); if (f.x1 != null) { f.x1 = mx(f.x1); f.y1 = my(f.y1); f.x2 = mx(f.x2); f.y2 = my(f.y2); } });
+  g.pillars.forEach(q => { q.x = mx(q.x); q.y = my(q.y); q.w *= sx; q.h *= sy; });
+  mv(g.player); resolveCircle(g.player, g.player.r);
+  g.floor = makeFloor(g.room);
 }
 window.addEventListener('resize', resize);
 window.addEventListener('orientationchange', () => setTimeout(resize, 120));
+if (window.visualViewport) window.visualViewport.addEventListener('resize', resize);
 
 // ---------------------------------------------------------------- weapons
 function rollRarity(luck, minIdx) {
@@ -129,16 +171,15 @@ function newRun() {
     player: { x: 0, y: 0, hp: 100, r: 9, vx: 0, vy: 0, aim: -Math.PI / 2, cd: 0, iframes: 0, dashT: 0, dashCd: 0, dashDx: 0, dashDy: 1,
               slots: [genWeapon('pistol', 0), null], active: 0, overdrive: 0, target: null, tgtT: 0, step: 0, face: -Math.PI / 2, blink: 0 }
   };
-  G.toast = null;
+  G.toast = null; G.near = null;
   startRoom(1);
-  showWeaponToast(G.player.slots[0], 'Starting weapon');
   state = 'play';
 }
 
 function startRoom(n) {
   const g = G;
   g.room = n; g.roomState = 'fight'; g.doorOpen = false; g.boss = null;
-  g.enemies.length = 0; g.bullets.length = 0; g.ebullets.length = 0; g.items.length = 0; g.chests.length = 0; g.patches.length = 0; g.fx.length = 0; g.timers.length = 0; g.nums.length = 0;
+  g.enemies.length = 0; g.bullets.length = 0; g.ebullets.length = 0; g.items.length = 0; g.chests.length = 0; g.patches.length = 0; g.fx.length = 0; g.timers.length = 0; g.nums.length = 0; g.near = null;
   genPillars(n);
   const p = g.player;
   p.x = ARENA.x + ARENA.w / 2; p.y = ARENA.y + ARENA.h - 34; p.vx = p.vy = 0; p.dashT = 0; p.iframes = 1;
@@ -540,18 +581,42 @@ function swapWeapon(i) {
   showWeaponToast(p.slots[i], 'Equipped');
 }
 
-function showWeaponToast(w, head) { if (G) G.toast = { w, head: head || 'Picked up', t: 3.6, m: 3.6 }; }
+function showWeaponToast(w, head) { if (G) G.toast = { w, head: head || 'Picked up', t: 2.2, m: 2.2 }; }
 
-function pickupWeapon(it) {
-  const g = G, p = g.player;
-  let slot = p.slots[0] ? (p.slots[1] ? p.active : 1) : 0;
-  const old = p.slots[slot];
-  p.slots[slot] = it.w; p.active = slot; g.found++;
+// Weapons on the floor are never picked up automatically: standing within PICK_R shows an inspect card + a Pick Up / Swap button.
+function pickRadius() { return PICK_R + (G ? G.P.magnet * 0.5 : 0); }
+function updateNear() {
+  const g = G, p = g.player, R = pickRadius();
+  let best = null, bd = 1e9;
+  for (let i = 0; i < g.items.length; i++) {
+    const it = g.items[i]; if (it.kind !== 'weapon') continue;
+    const d = Math.hypot(it.x - p.x, it.y - p.y);
+    if (it.ignore) { if (d > R + 10) it.ignore = false; continue; }     // just-dropped weapons are ignored until the player steps away
+    if (d <= R && d < bd) { bd = d; best = it; }
+  }
+  const cur = g.near;                                                    // hysteresis so the card does not flicker between two close weapons
+  if (cur && !cur.ignore && g.items.indexOf(cur) >= 0) { const dc = Math.hypot(cur.x - p.x, cur.y - p.y); if (dc <= R + 8 && (!best || dc <= bd + 6)) best = cur; }
+  g.near = best;
+}
+// Which slot a pickup goes to: a free slot if there is one, otherwise the requested slot (default: the active weapon)
+function pickupSlot(req) {
+  const p = G.player;
+  if (!p.slots[0]) return 0; if (!p.slots[1]) return 1;
+  return (req === 0 || req === 1) ? req : p.active;
+}
+function pickupNear(req) {
+  const g = G; if (!g || state !== 'play' || !g.near) return false;
+  const it = g.near, p = g.player, idx = g.items.indexOf(it); if (idx < 0) { g.near = null; return false; }
+  const slot = pickupSlot(req), old = p.slots[slot];
+  g.items.splice(idx, 1);
+  p.slots[slot] = it.w; p.active = slot; p.cd = Math.max(p.cd, 0.1); g.found++;
   if (old) g.items.push({ kind: 'weapon', w: old, x: p.x, y: p.y, t: 0, vx: rnd(-60, 60), vy: rnd(-60, 60), ignore: true });
-  showWeaponToast(it.w, 'Picked up');
+  g.near = null;
+  showWeaponToast(it.w, old ? 'Swapped in' : 'Picked up');
   sfx('pickup', 600, 0.15, 'triangle', 0.06, 1.8);
   ring(p.x, p.y, 30, RARITIES[it.w.rarity].color, 0.4);
   burst(p.x, p.y, 10, RARITIES[it.w.rarity].color, 100, 3, 0.5);
+  return true;
 }
 
 // ---------------------------------------------------------------- perks
@@ -770,10 +835,9 @@ function updateItems(dt) {
     const it = g.items[i]; it.t += dt;
     if (it.vx || it.vy) { it.x += it.vx * dt; it.y += it.vy * dt; it.vx *= Math.pow(0.02, dt); it.vy *= Math.pow(0.02, dt); const q = { x: it.x, y: it.y }; resolveCircle(q, 8); it.x = q.x; it.y = q.y; }
     const d = Math.hypot(it.x - p.x, it.y - p.y);
-    if (it.ignore) { if (d > 36) it.ignore = false; continue; }
     if (it.kind === 'heart' && d < R + 8) { p.hp = Math.min(g.P.maxHp, p.hp + 12); addNum(p.x, p.y - 16, '+12', '#6bff8a', 13); sfx('heal', 700, 0.12, 'sine', 0.05, 1.5); g.items.splice(i, 1); }
-    else if (it.kind === 'weapon' && d < R && it.t > 0.25) { g.items.splice(i, 1); pickupWeapon(it); }
   }
+  updateNear();
   g.chests.forEach(c => {
     c.t += dt;
     if (!c.open && Math.hypot(c.x - p.x, c.y - p.y) < 26) {
@@ -840,12 +904,30 @@ function updateBoss(dt) {
 // ---------------------------------------------------------------- input
 function toLogical(ev) { return { x: (ev.clientX - offX) / scale, y: (ev.clientY - offY) / scale }; }
 function layout() {
-  return {
-    pause: { x: LW - 36, y: 8, w: 28, h: 28 },
-    slot: [{ x: 12, y: LH - 164, w: 164, h: 40 }, { x: LW - 176, y: LH - 164, w: 164, h: 40 }],
-    dash: { x: LW - 58, y: LH - 62, r: 40 },
-    spec: { x: LW - 142, y: LH - 48, r: 32 }
-  };
+  const L = {};
+  if (land) {
+    const rx = LW - SA.r, by = LH - SA.b;
+    L.pause = { x: rx - 36, y: SA.t + 7, w: 28, h: 28 };
+    const sw = 150, sx1 = L.pause.x - 10 - sw;
+    L.slot = [{ x: sx1 - 6 - sw, y: SA.t + 5, w: sw, h: 34 }, { x: sx1, y: SA.t + 5, w: sw, h: 34 }];
+    L.dash = { x: rx - 52, y: by - 52, r: 40 };
+    L.spec = { x: rx - 130, y: by - 36, r: 32 };
+    const bx = rx - 160, bw = 152, low = L.dash.y - L.dash.r - 10;
+    L.pickBox = { single: { x: bx, y: low - 54, w: bw, h: 54 }, swap: [{ x: bx, y: low - 46 - 52, w: bw, h: 46 }, { x: bx, y: low - 46, w: bw, h: 46 }] };
+  } else {
+    L.pause = { x: LW - 36 - SA.r, y: 8 + SA.t, w: 28, h: 28 };
+    L.slot = [{ x: 12 + SA.l, y: LH - 164 - SA.b, w: 164, h: 40 }, { x: LW - 176 - SA.r, y: LH - 164 - SA.b, w: 164, h: 40 }];
+    L.dash = { x: LW - 58 - SA.r, y: LH - 62 - SA.b, r: 40 };
+    L.spec = { x: LW - 142 - SA.r, y: LH - 48 - SA.b, r: 32 };
+    const bot = ARENA.y + ARENA.h - 6, right = LW - SA.r - 12;
+    L.pickBox = { single: { x: right - 184, y: bot - 50, w: 184, h: 50 }, swap: [{ x: right - 184, y: bot - 50, w: 88, h: 50 }, { x: right - 88, y: bot - 50, w: 88, h: 50 }] };
+  }
+  // pickup buttons only exist while a floor weapon is in range
+  if (G && state === 'play' && G.near) {
+    const full = G.player.slots[0] && G.player.slots[1];
+    if (full) L.swap = L.pickBox.swap; else L.pick = L.pickBox.single;
+  }
+  return L;
 }
 const inR = (p, r) => p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h;
 const inC = (p, c, pad) => Math.hypot(p.x - c.x, p.y - c.y) <= c.r + (pad || 0);
@@ -857,12 +939,14 @@ cv.addEventListener('pointerdown', ev => {
   for (let i = hot.length - 1; i >= 0; i--) { if (inR(p, hot[i])) { hot[i].fn(); return; } }
   if (state !== 'play') return;
   const L = layout();
+  if (L.pick && inR(p, L.pick)) { pickupNear(); return; }
+  if (L.swap) for (let i = 0; i < 2; i++) if (inR(p, L.swap[i])) { pickupNear(i); return; }
   if (inR(p, L.pause)) { state = 'pause'; return; }
   if (inR(p, L.slot[0])) { swapWeapon(0); return; }
   if (inR(p, L.slot[1])) { swapWeapon(1); return; }
   if (inC(p, L.dash, 8)) { doDash(); return; }
   if (inC(p, L.spec, 8)) { useSpecial(); return; }
-  if (!joy.active && p.y > 120) {
+  if (!joy.active && p.y > ARENA.y && !(land && p.x > ARENA.x + ARENA.w)) {
     joy.active = true; joy.id = ev.pointerId; joy.ox = joy.x = p.x; joy.oy = joy.y = p.y; joy.mx = joy.my = 0;
     try { cv.setPointerCapture(ev.pointerId); } catch (e) { /* ignore */ }
   }
@@ -891,7 +975,8 @@ window.addEventListener('keydown', e => {
   keys[k] = true;
   if (state === 'play') {
     if (k === ' ' || k === 'shift') doDash();
-    else if (k === 'e' || k === 'q') useSpecial();
+    else if (k === 'q') useSpecial();
+    else if (k === 'e') pickupNear();
     else if (k === '1') swapWeapon(0); else if (k === '2') swapWeapon(1); else if (k === 'tab') { e.preventDefault(); swapWeapon(); }
     else if (k === 'escape' || k === 'p') state = 'pause';
   } else if (state === 'pause') { if (k === 'escape' || k === 'p') state = 'play'; }
@@ -979,12 +1064,9 @@ function drawWorld() {
     if (it.w.rarity > 0) { const gr = ctx.createLinearGradient(0, it.y - 70, 0, it.y); gr.addColorStop(0, hexA(col, 0)); gr.addColorStop(1, hexA(col, 0.4 + it.w.rarity * 0.08)); ctx.fillStyle = gr; ctx.fillRect(it.x - 6 - it.w.rarity, it.y - 70, 12 + it.w.rarity * 2, 70); }
     glow(it.x, it.y, 22 + it.w.rarity * 3 + Math.sin(t * 5) * 2, col, 0.55 + it.w.rarity * 0.1);
     drawGun(it.w.type, it.x - 6, it.y + bob, -0.35, 1.0, col);
-    const d = Math.hypot(it.x - p.x, it.y - p.y);
-    if (d < 120 && !it.ignore) {
-      const cur = p.slots[p.active];
-      fitTxt(it.w.name, it.x, it.y - 26, 130, 10, col, 'center');
-      const dp = Math.round(weaponDps(it.w)), cd = cur ? Math.round(weaponDps(cur)) : 0;
-      txt('DPS ' + dp + (cur ? (dp > cd ? '  ▲' : dp < cd ? '  ▼' : '') : ''), it.x, it.y - 15, 9, dp > cd ? '#6bff8a' : dp < cd ? '#ff8a8a' : '#ddd', 'center', '600');
+    if (it === g.near) {
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.globalAlpha = 0.6 + Math.sin(t * 8) * 0.3;
+      ctx.beginPath(); ctx.arc(it.x, it.y + 2, 17 + Math.sin(t * 6) * 1.5, 0, TAU); ctx.stroke(); ctx.globalAlpha = 1;
     }
   });
   // enemies
@@ -1085,24 +1167,55 @@ function drawPlayer(t) {
 }
 
 // ---------------------------------------------------------------- rendering: HUD
+function drawSlot(i, s, ws, act, tiny) {
+  rr(s.x, s.y, s.w, s.h, 9); ctx.fillStyle = act ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.5)'; ctx.fill();
+  ctx.lineWidth = act ? 2.5 : 1.5; ctx.strokeStyle = ws ? RARITIES[ws.rarity].color : 'rgba(255,255,255,0.25)'; ctx.globalAlpha = act ? 1 : 0.6; ctx.stroke(); ctx.globalAlpha = 1;
+  if (ws) {
+    drawGun(ws.type, s.x + 12, s.y + s.h / 2 + 1, 0, tiny ? 0.8 : 0.9, RARITIES[ws.rarity].color);
+    const adj = ws.afx.map(a => AFFIX_BY_ID[a].adj).join(' '), tn = WEAPON_TYPES[ws.type].name;
+    fitTxt(adj || tn, s.x + 42, s.y + s.h * 0.35, s.w - 48, tiny ? 11 : 12, RARITIES[ws.rarity].color, 'left');
+    fitTxt((adj ? tn + ' · ' : '') + 'DPS ' + Math.round(weaponDps(ws)), s.x + 42, s.y + s.h * 0.74, s.w - 48, tiny ? 9.5 : 10.5, '#b9c2d6', 'left', '600');
+  } else txt('Empty slot', s.x + s.w / 2, s.y + s.h / 2, 12, '#7d869c', 'center', '600');
+  txt(String(i + 1), s.x + s.w - 9, s.y + 9, 9, '#8a93ab', 'center', '700');
+}
+function drawPauseBtn(r) {
+  rr(r.x, r.y, 28, 28, 7); ctx.fillStyle = 'rgba(255,255,255,0.14)'; ctx.fill(); ctx.strokeStyle = 'rgba(255,255,255,0.5)'; ctx.lineWidth = 1.5; ctx.stroke();
+  ctx.fillStyle = '#fff'; ctx.fillRect(r.x + 9, r.y + 8, 3.5, 12); ctx.fillRect(r.x + 15.5, r.y + 8, 3.5, 12);
+}
 function drawHud() {
   const g = G, p = g.player, P = g.P, L = layout(), t = performance.now() / 1000;
-  // top bar
-  ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(0, 0, LW, 58);
-  const hw = 150, hp = clamp(p.hp / P.maxHp, 0, 1);
-  rr(12, 10, hw, 20, 6); ctx.fillStyle = '#2a0f16'; ctx.fill();
-  if (hp > 0) { rr(12, 10, Math.max(8, hw * hp), 20, 6); ctx.fillStyle = hp > 0.5 ? '#2fcf6a' : hp > 0.25 ? '#e0b030' : '#e0384e'; ctx.fill(); }
-  rr(12, 10, hw, 20, 6); ctx.strokeStyle = 'rgba(255,255,255,0.5)'; ctx.lineWidth = 1.5; ctx.stroke();
-  txt('♥ ' + Math.ceil(Math.max(0, p.hp)) + ' / ' + P.maxHp, 12 + hw / 2, 20.5, 13, '#fff', 'center');
-  txt(g.room === BOSS_ROOM ? 'BOSS' : 'ROOM ' + g.room + '/5', 12, 45, 13, '#cfd6e6', 'left');
-  txt(fmt(g.time), 190, 20, 14, '#fff', 'center');
-  txt('Kills ' + g.kills, 108, 45, 13, '#cfd6e6', 'left');
-  // cursed warning / perks dots
-  const w = p.slots[p.active];
-  if (w && w.fx.cursed) txt('CURSED: +35% dmg taken', LW - 12, 45, 11, '#ff6a8a', 'right', '700');
-  // pause button
-  rr(L.pause.x, L.pause.y, 28, 28, 7); ctx.fillStyle = 'rgba(255,255,255,0.14)'; ctx.fill(); ctx.strokeStyle = 'rgba(255,255,255,0.5)'; ctx.lineWidth = 1.5; ctx.stroke();
-  ctx.fillStyle = '#fff'; ctx.fillRect(L.pause.x + 9, L.pause.y + 8, 3.5, 12); ctx.fillRect(L.pause.x + 15.5, L.pause.y + 8, 3.5, 12);
+  const w = p.slots[p.active], hpf = clamp(p.hp / P.maxHp, 0, 1), hpCol = hpf > 0.5 ? '#2fcf6a' : hpf > 0.25 ? '#e0b030' : '#e0384e';
+  const roomTxt = g.room === BOSS_ROOM ? 'BOSS' : 'ROOM ' + g.room + '/5';
+  if (land) {
+    ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(0, 0, LW, SA.t + 44);
+    const hx = SA.l + 8, hy = SA.t + 5, hw = 140;
+    rr(hx, hy, hw, 18, 6); ctx.fillStyle = '#2a0f16'; ctx.fill();
+    if (hpf > 0) { rr(hx, hy, Math.max(8, hw * hpf), 18, 6); ctx.fillStyle = hpCol; ctx.fill(); }
+    rr(hx, hy, hw, 18, 6); ctx.strokeStyle = 'rgba(255,255,255,0.5)'; ctx.lineWidth = 1.5; ctx.stroke();
+    txt('♥ ' + Math.ceil(Math.max(0, p.hp)) + ' / ' + P.maxHp, hx + hw / 2, hy + 9.5, 12, '#fff', 'center');
+    txt(roomTxt + '  ·  Kills ' + g.kills, hx, SA.t + 33, 11.5, '#cfd6e6', 'left');
+    txt(fmt(g.time), hx + hw + 12, SA.t + 14, 15, '#fff', 'left');
+    drawPauseBtn(L.pause);
+    L.slot.forEach((sl, i) => drawSlot(i, sl, p.slots[i], p.active === i, true));
+    // side panel behind the thumb buttons (keeps the play area clear)
+    const px = ARENA.x + ARENA.w + 4;
+    ctx.fillStyle = 'rgba(255,255,255,0.03)'; ctx.fillRect(px, ARENA.y, LW - px - SA.r, ARENA.h);
+    if (w && w.fx.cursed) txt('CURSED: +35% dmg taken', ARENA.x + 6, ARENA.y + 10, 10.5, '#ff6a8a', 'left', '700');
+  } else {
+    ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(0, 0, LW, 58 + SA.t);
+    ctx.save(); ctx.translate(0, SA.t);
+    const hw = 150, hx = 12 + SA.l;
+    rr(hx, 10, hw, 20, 6); ctx.fillStyle = '#2a0f16'; ctx.fill();
+    if (hpf > 0) { rr(hx, 10, Math.max(8, hw * hpf), 20, 6); ctx.fillStyle = hpCol; ctx.fill(); }
+    rr(hx, 10, hw, 20, 6); ctx.strokeStyle = 'rgba(255,255,255,0.5)'; ctx.lineWidth = 1.5; ctx.stroke();
+    txt('♥ ' + Math.ceil(Math.max(0, p.hp)) + ' / ' + P.maxHp, hx + hw / 2, 20.5, 13, '#fff', 'center');
+    txt(roomTxt, hx, 45, 13, '#cfd6e6', 'left');
+    txt(fmt(g.time), hx + hw + 28, 20, 14, '#fff', 'center');
+    txt('Kills ' + g.kills, hx + 96, 45, 13, '#cfd6e6', 'left');
+    if (w && w.fx.cursed) txt('CURSED: +35% dmg taken', LW - 12 - SA.r, 45, 11, '#ff6a8a', 'right', '700');
+    ctx.restore();
+    drawPauseBtn(L.pause);
+  }
   // boss bar
   if (g.boss && !g.boss.dead) {
     const e = g.boss, bw = ARENA.w - 20, bx = ARENA.x + 10, by = ARENA.y + 6;
@@ -1111,40 +1224,98 @@ function drawHud() {
     txt('THE WARDEN', ARENA.x + ARENA.w / 2, by + 5.5, 10, '#fff', 'center');
   }
   // banner
-  if (g.banner && state === 'play') { const a = clamp(g.banner.t * 2, 0, 1); ctx.globalAlpha = a; txt(g.banner.text, LW / 2, ARENA.y + ARENA.h * 0.3, 26, '#fff', 'center', '800'); ctx.globalAlpha = 1; }
-  // weapon toast
-  if (g.toast && state === 'play') drawToast(g.toast);
-  // slots
-  for (let i = 0; i < 2; i++) {
-    const s = L.slot[i], ws = p.slots[i], act = p.active === i;
-    rr(s.x, s.y, s.w, s.h, 9); ctx.fillStyle = act ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.5)'; ctx.fill();
-    ctx.lineWidth = act ? 2.5 : 1.5; ctx.strokeStyle = ws ? RARITIES[ws.rarity].color : 'rgba(255,255,255,0.25)'; ctx.globalAlpha = act ? 1 : 0.6; ctx.stroke(); ctx.globalAlpha = 1;
-    if (ws) {
-      drawGun(ws.type, s.x + 12, s.y + s.h / 2 + 1, 0, 0.9, RARITIES[ws.rarity].color);
-      const adj = ws.afx.map(a => AFFIX_BY_ID[a].adj).join(' '), tn = WEAPON_TYPES[ws.type].name;
-      fitTxt(adj || tn, s.x + 42, s.y + 14, s.w - 48, 12, RARITIES[ws.rarity].color, 'left');
-      fitTxt((adj ? tn + ' · ' : '') + 'DPS ' + Math.round(weaponDps(ws)), s.x + 42, s.y + 30, s.w - 48, 10.5, '#b9c2d6', 'left', '600');
-    } else txt('Empty slot', s.x + s.w / 2, s.y + s.h / 2, 12, '#7d869c', 'center', '600');
-    txt(String(i + 1), s.x + s.w - 9, s.y + 9, 9, '#8a93ab', 'center', '700');
-  }
+  if (g.banner && state === 'play') { const a = clamp(g.banner.t * 2, 0, 1); ctx.globalAlpha = a; txt(g.banner.text, ARENA.x + ARENA.w / 2, ARENA.y + ARENA.h * 0.3, 26, '#fff', 'center', '800'); ctx.globalAlpha = 1; }
+  // floor weapon inspect card + pickup buttons (only while standing near a weapon), otherwise a short toast
+  if (g.near) { drawFloorTip(g.near); drawPickButtons(L, t); }
+  else if (g.toast && state === 'play') drawToast(g.toast);
+  // slots (portrait; landscape draws them in the top bar)
+  if (!land) L.slot.forEach((sl, i) => drawSlot(i, sl, p.slots[i], p.active === i, false));
   // dash + special buttons
   const dcd = clamp(p.dashCd / P.dashCd, 0, 1);
   circBtn(L.dash.x, L.dash.y, L.dash.r, '#1f9bd0', 'DASH', dcd, '⇢');
-  const ws = p.slots[p.active];
-  const scd = ws ? clamp(ws.spCd / (ws.spMax * P.specialCd), 0, 1) : 1;
-  circBtn(L.spec.x, L.spec.y, L.spec.r, '#a04ad8', ws ? WEAPON_TYPES[ws.type].special.toUpperCase() : '-', scd, '★');
+  const scd = w ? clamp(w.spCd / (w.spMax * P.specialCd), 0, 1) : 1;
+  circBtn(L.spec.x, L.spec.y, L.spec.r, '#a04ad8', w ? WEAPON_TYPES[w.type].special.toUpperCase() : '-', scd, '★');
   // joystick
+  const jh = land ? { x: ARENA.x + 74, y: ARENA.y + ARENA.h - 74 } : { x: 70, y: LH - 74 - SA.b };
   if (joy.active) {
     ctx.globalAlpha = 0.5; ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.fillStyle = 'rgba(255,255,255,0.08)';
     ctx.beginPath(); ctx.arc(joy.ox, joy.oy, 46, 0, TAU); ctx.fill(); ctx.stroke();
     ctx.globalAlpha = 0.75; ctx.fillStyle = '#fff'; const kx = joy.ox + joy.mx * 40, ky = joy.oy + joy.my * 40; ctx.beginPath(); ctx.arc(kx, ky, 20, 0, TAU); ctx.fill(); ctx.globalAlpha = 1;
   } else if (g.time < 7 && g.room === 1) {
-    ctx.globalAlpha = 0.45 + Math.sin(t * 4) * 0.15; ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(70, LH - 74, 40, 0, TAU); ctx.stroke(); ctx.beginPath(); ctx.arc(70 + Math.sin(t * 2) * 14, LH - 74 + Math.cos(t * 2) * 10, 16, 0, TAU); ctx.fillStyle = 'rgba(255,255,255,0.5)'; ctx.fill(); ctx.globalAlpha = 1;
-    txt('Drag anywhere to move', 70, LH - 124 + 78, 11, '#cfd6e6', 'center', '600');
-    txt('Auto-aim & auto-fire', 70, LH - 28, 11, '#cfd6e6', 'center', '600');
+    ctx.globalAlpha = 0.45 + Math.sin(t * 4) * 0.15; ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(jh.x, jh.y, 40, 0, TAU); ctx.stroke(); ctx.beginPath(); ctx.arc(jh.x + Math.sin(t * 2) * 14, jh.y + Math.cos(t * 2) * 10, 16, 0, TAU); ctx.fillStyle = 'rgba(255,255,255,0.5)'; ctx.fill(); ctx.globalAlpha = 1;
+    txt('Drag anywhere to move', jh.x, land ? jh.y - 54 : jh.y + 50, 11, '#cfd6e6', 'center', '600');
+    txt('Auto-aim & auto-fire', jh.x, land ? jh.y + 56 : jh.y + 64, 11, '#cfd6e6', 'center', '600');
+  } else if (land) {
+    ctx.globalAlpha = 0.16; ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(jh.x, jh.y, 40, 0, TAU); ctx.stroke(); ctx.beginPath(); ctx.arc(jh.x, jh.y, 16, 0, TAU); ctx.fillStyle = 'rgba(255,255,255,0.4)'; ctx.fill(); ctx.globalAlpha = 1;
   }
   if (g.flash > 0) { ctx.fillStyle = 'rgba(255,40,70,' + (g.flash * 0.9).toFixed(2) + ')'; ctx.fillRect(0, 0, LW, LH); }
   if (p.hp / P.maxHp < 0.3 && p.hp > 0) { ctx.strokeStyle = 'rgba(255,40,70,' + (0.25 + Math.sin(t * 6) * 0.15).toFixed(2) + ')'; ctx.lineWidth = 10; ctx.strokeRect(0, 0, LW, LH); }
+}
+
+// ---- floor weapon inspect card with stat deltas vs. equipped weapons
+const GOOD = '#6bff8a', BAD = '#ff6a7a', NEUT = '#8f98ad';
+const STAT_DEFS = [
+  { label: 'Damage', get: w => w.dmg * w.pellets, fmt: (v, w) => Math.round(v) + (w.pellets > 1 ? ' (' + w.pellets + '×' + w.dmg.toFixed(0) + ')' : ''), eps: 0.5, dfmt: d => Math.round(Math.abs(d)) },
+  { label: 'Fire rate', get: w => w.rate, fmt: v => v.toFixed(1) + '/s', eps: 0.05, dfmt: d => Math.abs(d).toFixed(1) },
+  { label: 'DPS', get: w => weaponDps(w), fmt: v => String(Math.round(v)), eps: 0.5, dfmt: d => Math.round(Math.abs(d)) },
+  { label: 'Range', get: w => weaponRange(w), fmt: v => String(Math.round(v)), eps: 1, dfmt: d => Math.round(Math.abs(d)) },
+  { label: 'Rarity', get: w => w.rarity, fmt: v => RARITIES[v].name, eps: 0.5, dfmt: d => Math.abs(d) + (Math.abs(d) > 1 ? ' tiers' : ' tier') }
+];
+function deltaTxt(def, a, b) {   // a = floor weapon, b = equipped
+  const d = def.get(a) - def.get(b);
+  if (Math.abs(d) < def.eps) return { s: '=', c: NEUT };
+  return d > 0 ? { s: '▲ +' + def.dfmt(d), c: GOOD } : { s: '▼ -' + def.dfmt(d), c: BAD };
+}
+function floorTipLines(w, act) {
+  const lines = [];
+  w.afx.forEach(a => { const has = act && act.fx[a], A = AFFIX_BY_ID[a]; lines.push(has ? { c: '#9aa4bd', s: '= ' + A.name + ': ' + A.desc } : { c: GOOD, s: '+ NEW ' + A.name + ': ' + A.desc }); });
+  if (!w.afx.length) lines.push({ c: NEUT, s: 'No affixes' });
+  const lost = act ? act.afx.filter(a => !w.fx[a]) : [];
+  if (lost.length) lines.push({ c: BAD, s: '− Lose: ' + lost.map(a => AFFIX_BY_ID[a].name).join(', ') });
+  weaponCombos(w).forEach(c => lines.push({ c: '#ffd27a', s: '★ ' + c }));
+  const B = WEAPON_TYPES[w.type];
+  lines.push({ c: '#c9a8ff', s: 'Special – ' + B.special + ': ' + B.sdesc });
+  return lines;
+}
+function drawFloorTip(it) {
+  const g = G, p = g.player, w = it.w, R = RARITIES[w.rarity];
+  const cols = []; p.slots.forEach((sl, i) => { if (sl) cols.push({ i, w: sl }); });
+  const act = p.slots[p.active], lines = floorTipLines(w, act);
+  const wd = land ? Math.min(312, ARENA.w - 12) : ARENA.w - 12, rowH = 13.5;
+  const h = 12 + 14 + 22 + 14 + STAT_DEFS.length * rowH + 8 + lines.length * 12.5 + 8;
+  const x = land ? (p.x > ARENA.x + ARENA.w / 2 ? ARENA.x + 6 : ARENA.x + ARENA.w - 6 - wd) : ARENA.x + 6;
+  const top = p.y > ARENA.y + ARENA.h / 2;
+  const y = top ? ARENA.y + (g.boss ? 22 : 6) : ARENA.y + ARENA.h - h - (land ? 6 : 60);
+  rr(x, y, wd, h, 10); ctx.fillStyle = 'rgba(8,10,18,0.9)'; ctx.fill(); ctx.lineWidth = 2; ctx.strokeStyle = R.color; ctx.stroke();
+  txt('ON THE FLOOR  ·  ' + R.name.toUpperCase(), x + 10, y + 12, 10, R.color, 'left', '700');
+  fitTxt(w.name, x + 10, y + 31, wd - 20, 16, R.color, 'left', '800');
+  // column headers
+  const cx = cols.length === 2 ? [x + wd - 150, x + wd - 72] : [x + wd - 92];
+  const hy = y + 50;
+  cols.forEach((c, k) => { const isAct = c.i === p.active; txt((cols.length === 1 ? 'vs equipped' : 'vs ' + (c.i + 1)) + (isAct && cols.length > 1 ? '●' : ''), cx[k], hy, 9, isAct ? '#fff' : '#8a93ab', 'left', '700', false); });
+  STAT_DEFS.forEach((def, r) => {
+    const ry = hy + 14 + r * rowH;
+    txt(def.label, x + 10, ry, 10.5, '#9aa4bd', 'left', '600', false);
+    txt(def.fmt(def.get(w), w), x + 66, ry, 11, def.label === 'Rarity' ? R.color : '#fff', 'left', '800', false);
+    cols.forEach((c, k) => { const d = deltaTxt(def, w, c.w); txt(d.s, cx[k], ry, 10.5, d.c, 'left', '800', false); });
+  });
+  const ly = hy + 14 + STAT_DEFS.length * rowH + 8;
+  ctx.strokeStyle = 'rgba(255,255,255,0.15)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x + 10, ly - 8); ctx.lineTo(x + wd - 10, ly - 8); ctx.stroke();
+  lines.forEach((l, i) => fitTxt(l.s, x + 10, ly + i * 12.5, wd - 20, 10, l.c, 'left', '600'));
+}
+const kbd = typeof matchMedia === 'function' && !matchMedia('(pointer: coarse)').matches;
+function drawPickButtons(L, t) {
+  const g = G, p = g.player, n = g.near, R = RARITIES[n.w.rarity], pulse = 0.5 + 0.5 * Math.sin(t * 6);
+  const pb = (r, title, sub, subCol, hl, hint) => {
+    glow(r.x + r.w / 2, r.y + r.h / 2, r.w * 0.62, R.color, 0.25 + pulse * 0.25);
+    rr(r.x, r.y, r.w, r.h, 12); ctx.fillStyle = hl ? hexA(R.color, 0.45) : 'rgba(10,14,24,0.92)'; ctx.fill();
+    ctx.lineWidth = 2.5 + pulse; ctx.strokeStyle = R.color; ctx.stroke();
+    fitTxt(title, r.x + r.w / 2, r.y + r.h * 0.38, r.w - 12, 15, '#fff', 'center', '800');
+    fitTxt(sub, r.x + r.w / 2, r.y + r.h * 0.74, r.w - 12, 10, subCol, 'center', '700');
+    if (hint && kbd) { rr(r.x + r.w - 20, r.y + 3, 17, 15, 4); ctx.fillStyle = 'rgba(255,255,255,0.85)'; ctx.fill(); txt('E', r.x + r.w - 11.5, r.y + 11, 10, '#111', 'center', '800', false); }
+  };
+  if (L.pick) pb(L.pick, 'PICK UP', n.w.name, R.color, true, true);
+  else if (L.swap) L.swap.forEach((r, i) => { const o = p.slots[i]; pb(r, 'SWAP SLOT ' + (i + 1), 'drops ' + (o ? o.name : ''), o ? RARITIES[o.rarity].color : '#aaa', p.active === i, p.active === i); });
 }
 function circBtn(x, y, r, color, label, cd, icon) {
   ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.fill();
@@ -1154,27 +1325,44 @@ function circBtn(x, y, r, color, label, cd, icon) {
   fitTxt(label, x, y + 1, r * 1.55, r > 34 ? 14 : 10.5, '#fff', 'center', '800');
 }
 function drawToast(T) {
-  const w = T.w, R = RARITIES[w.rarity], B = WEAPON_TYPES[w.type];
-  const lines = []; w.afx.forEach(a => lines.push({ c: R.color, s: '◆ ' + AFFIX_BY_ID[a].name + ': ' + AFFIX_BY_ID[a].desc }));
-  weaponCombos(w).forEach(c => lines.push({ c: '#ffd27a', s: '★ ' + c }));
-  lines.push({ c: '#c9a8ff', s: 'Special – ' + B.special + ': ' + B.sdesc });
-  const h = 56 + lines.length * 14, x = ARENA.x + 6, wd = ARENA.w - 12, y = ARENA.y + (G.boss ? 22 : 6);
-  const a = clamp(T.t, 0, 0.5) * 2;
-  ctx.globalAlpha = a;
-  rr(x, y, wd, h, 10); ctx.fillStyle = 'rgba(8,10,18,0.86)'; ctx.fill(); ctx.lineWidth = 2; ctx.strokeStyle = R.color; ctx.stroke();
-  txt(T.head.toUpperCase() + '  ·  ' + R.name.toUpperCase(), x + 10, y + 12, 10, R.color, 'left', '700');
-  fitTxt(w.name, x + 10, y + 29, wd - 20, 17, R.color, 'left', '800');
-  txt('DMG ' + w.dmg.toFixed(1) + (w.pellets > 1 ? ' x' + w.pellets : '') + '   RATE ' + w.rate.toFixed(1) + '/s   DPS ' + Math.round(weaponDps(w)), x + 10, y + 46, 11.5, '#e6ebf7', 'left', '600');
-  lines.forEach((l, i) => fitTxt(l.s, x + 10, y + 62 + i * 14, wd - 20, 10.5, l.c, 'left', '600'));
+  const w = T.w, R = RARITIES[w.rarity];
+  const label = T.head.toUpperCase() + ': ' + w.name;
+  ctx.font = '800 12px system-ui,sans-serif';
+  const wd = Math.min(ARENA.w - 12, ctx.measureText(label).width + 28), x = ARENA.x + ARENA.w / 2 - wd / 2, y = ARENA.y + (G.boss ? 24 : 8);
+  ctx.globalAlpha = clamp(T.t, 0, 0.5) * 2;
+  rr(x, y, wd, 24, 12); ctx.fillStyle = 'rgba(8,10,18,0.85)'; ctx.fill(); ctx.lineWidth = 1.5; ctx.strokeStyle = R.color; ctx.stroke();
+  fitTxt(label, x + wd / 2, y + 12.5, wd - 16, 12, R.color, 'center', '800');
   ctx.globalAlpha = 1;
 }
 
 // ---------------------------------------------------------------- rendering: screens
 function overlay(a) { ctx.fillStyle = 'rgba(4,5,10,' + a + ')'; ctx.fillRect(0, 0, LW, LH); }
-function statRow(label, val, y, hi) { txt(label, 40, y, 14, '#9aa4bd', 'left', '600'); txt(val, LW - 40, y, 15, hi ? '#ffe066' : '#fff', 'right', '800'); }
+function statRow(label, val, y, hi, x0, x1) { x0 = x0 == null ? 40 : x0; x1 = x1 == null ? LW - 40 : x1; txt(label, x0, y, 14, '#9aa4bd', 'left', '600'); txt(val, x1, y, 15, hi ? '#ffe066' : '#fff', 'right', '800'); }
 
+function bestRows() {
+  return [['Furthest room', best.bestRoom ? (best.bestRoom >= 6 ? 'Boss' : best.bestRoom + ' / 5') : '-'], ['Fastest win', best.bestTime ? fmt(best.bestTime) : '-'],
+    ['Most kills', best.mostKills || '-'], ['Most damage', best.bestDmg ? best.bestDmg.toLocaleString() : '-'], ['Runs / wins', best.runs + ' / ' + best.wins]];
+}
+function drawMenuLand(t) {
+  ctx.fillStyle = '#0b0d14'; ctx.fillRect(0, 0, LW, LH);
+  for (let i = 0; i < 26; i++) { const x = (i * 97 + Math.sin(t * 0.4 + i) * 20) % LW, y = (i * 53 + t * (10 + i % 7 * 4)) % LH; glow(x, y, 20 + (i % 4) * 6, RARITIES[i % 4].color, 0.12); }
+  const cl = SA.l + (LW - SA.l - SA.r) * 0.27, cr = SA.l + (LW - SA.l - SA.r) * 0.72;
+  glow(cl, LH * 0.3, 150, '#27d6c0', 0.18);
+  txt('LOOT', cl, LH * 0.2, 50, '#27d6c0', 'center', '900');
+  txt('& LEAD', cl, LH * 0.2 + 46, 42, '#ffb23e', 'center', '900');
+  txt('one-thumb roguelike shooter', cl, LH * 0.2 + 82, 14, '#aab3c9', 'center', '600');
+  [['pistol', 0], ['smg', 1], ['shotgun', 2], ['sniper', 3]].forEach((q, i) => { const x = cl - 117 + i * 78, y = LH * 0.2 + 118 + Math.sin(t * 2 + i) * 4; glow(x, y, 24, RARITIES[q[1]].color, 0.5); drawGun(q[0], x - 8, y, -0.3, 1.2, RARITIES[q[1]].color); });
+  button(cl - 110, LH * 0.2 + 150, 220, 56, 'START RUN', () => newRun(), '#1f8f7a', 24);
+  const cw = 270, cx0 = cr - cw / 2, cy0 = SA.t + 24;
+  rr(cx0, cy0, cw, 150, 12); ctx.fillStyle = 'rgba(255,255,255,0.06)'; ctx.fill();
+  txt('BEST RUN STATS', cr, cy0 + 20, 13, '#ffb23e', 'center', '800');
+  bestRows().forEach((r, i) => { txt(r[0], cx0 + 16, cy0 + 44 + i * 21, 13, '#9aa4bd', 'left', '600'); txt(String(r[1]), cx0 + cw - 16, cy0 + 44 + i * 21, 14, '#fff', 'right', '800'); });
+  ['Drag to move · auto-aim & fire', 'DASH to dodge · SPECIAL for weapon power', 'Stand near a weapon: PICK UP / SWAP button', 'Desktop: WASD, Space dash, Q special, E pick up, 1/2 equip'].forEach((h, i) => txt(h, cr, cy0 + 176 + i * 18, 11.5, '#8a93ab', 'center', '600', false));
+  txt('5 rooms + boss · random weapons & affixes', cr, LH - SA.b - 14, 11.5, '#6f7890', 'center', '600', false);
+}
 function drawMenu() {
   const t = performance.now() / 1000;
+  if (land) { drawMenuLand(t); return; }
   ctx.fillStyle = '#0b0d14'; ctx.fillRect(0, 0, LW, LH);
   hotOff = Math.max(0, Math.round((LH - 640) * 0.3)); ctx.save(); ctx.translate(0, hotOff);
   for (let i = 0; i < 26; i++) { const x = (i * 97 + Math.sin(t * 0.4 + i) * 20) % LW, y = (i * 53 + t * (10 + i % 7 * 4)) % LH; glow(x, y, 20 + (i % 4) * 6, RARITIES[i % 4].color, 0.12); }
@@ -1187,10 +1375,9 @@ function drawMenu() {
   button(LW / 2 - 110, 262, 220, 56, 'START RUN', () => newRun(), '#1f8f7a', 24);
   rr(28, 338, LW - 56, 154, 12); ctx.fillStyle = 'rgba(255,255,255,0.06)'; ctx.fill();
   txt('BEST RUN STATS', LW / 2, 358, 13, '#ffb23e', 'center', '800');
-  const rows = [['Furthest room', best.bestRoom ? (best.bestRoom >= 6 ? 'Boss' : best.bestRoom + ' / 5') : '-'], ['Fastest win', best.bestTime ? fmt(best.bestTime) : '-'],
-    ['Most kills', best.mostKills || '-'], ['Most damage', best.bestDmg ? best.bestDmg.toLocaleString() : '-'], ['Runs / wins', best.runs + ' / ' + best.wins]];
+  const rows = bestRows();
   rows.forEach((r, i) => { txt(r[0], 44, 382 + i * 22, 13, '#9aa4bd', 'left', '600'); txt(String(r[1]), LW - 44, 382 + i * 22, 14, '#fff', 'right', '800'); });
-  const hint = ['Drag anywhere to move · auto-aim & fire', 'DASH to dodge · SPECIAL for weapon power', 'Tap a weapon slot to swap', 'Desktop: WASD/arrows, Space dash, E special, 1/2 swap'];
+  const hint = ['Drag anywhere to move · auto-aim & fire', 'DASH to dodge · SPECIAL for weapon power', 'Stand near a weapon: PICK UP / SWAP button', 'Desktop: WASD, Space dash, Q special, E pick up, 1/2 equip'];
   hint.forEach((h, i) => txt(h, LW / 2, 520 + i * 18, 11.5, '#8a93ab', 'center', '600', false));
   txt('5 rooms + boss · random weapons & affixes', LW / 2, 640 - 24, 11.5, '#6f7890', 'center', '600', false);
   ctx.restore(); hotOff = 0;
@@ -1198,6 +1385,27 @@ function drawMenu() {
 
 function drawPerkScreen() {
   overlay(0.78);
+  if (land) {
+    const cxm = SA.l + (LW - SA.l - SA.r) / 2;
+    txt('ROOM CLEARED', cxm, SA.t + 34, 14, '#6bff8a', 'center', '800');
+    txt('CHOOSE A PERK', cxm, SA.t + 62, 26, '#fff', 'center', '900');
+    const offer = G.perkOffer; if (!offer) return;
+    const gap = 14, cw = Math.min(230, (LW - SA.l - SA.r - 40 - gap * 2) / 3), ch = Math.min(200, LH - SA.t - SA.b - 150), y = SA.t + 90;
+    const x0 = cxm - (cw * 3 + gap * 2) / 2;
+    offer.forEach((pk, i) => {
+      const x = x0 + i * (cw + gap);
+      hot.push({ x, y, w: cw, h: ch, fn: () => takePerk(pk) });
+      rr(x, y, cw, ch, 14); ctx.fillStyle = 'rgba(255,255,255,0.08)'; ctx.fill(); ctx.lineWidth = 2.5; ctx.strokeStyle = pk.color; ctx.stroke();
+      glow(x + cw / 2, y + 50, 40, pk.color, 0.5);
+      ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.beginPath(); ctx.arc(x + cw / 2, y + 50, 28, 0, TAU); ctx.fill(); ctx.strokeStyle = pk.color; ctx.lineWidth = 2; ctx.stroke();
+      txt(pk.icon, x + cw / 2, y + 51, 28, pk.color, 'center', '800');
+      fitTxt(pk.name, x + cw / 2, y + 108, cw - 20, 19, '#fff', 'center', '800');
+      fitTxt(pk.desc, x + cw / 2, y + 136, cw - 20, 13, pk.color, 'center', '600');
+      txt(String(i + 1), x + cw - 12, y + 13, 11, '#8a93ab', 'center', '700');
+    });
+    txt('Tap a card to take it', cxm, y + ch + 22, 12, '#8a93ab', 'center', '600');
+    return;
+  }
   txt('ROOM CLEARED', LW / 2, 70, 15, '#6bff8a', 'center', '800');
   txt('CHOOSE A PERK', LW / 2, 98, 26, '#fff', 'center', '900');
   const offer = G.perkOffer; if (!offer) return;
@@ -1218,6 +1426,16 @@ function drawPerkScreen() {
 
 function drawPause() {
   overlay(0.72);
+  if (land) {
+    const cl = SA.l + (LW - SA.l - SA.r) * 0.3, cr = SA.l + (LW - SA.l - SA.r) * 0.72;
+    txt('PAUSED', cl, SA.t + 70, 38, '#fff', 'center', '900');
+    button(cl - 100, SA.t + 110, 200, 52, 'RESUME', () => { state = 'play'; }, '#1f8f7a', 20);
+    button(cl - 100, SA.t + 176, 200, 46, muted ? 'SOUND: OFF' : 'SOUND: ON', () => { muted = !muted; }, '#3a4560', 16);
+    button(cl - 100, SA.t + 236, 200, 46, 'QUIT TO MENU', () => { state = 'menu'; G = null; resize(); }, '#8a2f45', 16);
+    if (G) { const p = G.player; [0, 1].forEach(i => { const w = p.slots[i]; if (w) fitTxt((i + 1) + '. ' + w.name + '  (DPS ' + Math.round(weaponDps(w)) + ')', cr, SA.t + 130 + i * 26, LW * 0.4, 13, RARITIES[w.rarity].color, 'center'); });
+      fitTxt('Perks: ' + (G.perksTaken.length ? G.perksTaken.map(id => PERKS.find(x => x.id === id).name).join(', ') : 'none'), cr, SA.t + 200, LW * 0.4, 11, '#9aa4bd', 'center', '600'); }
+    return;
+  }
   txt('PAUSED', LW / 2, 150, 38, '#fff', 'center', '900');
   button(LW / 2 - 100, 200, 200, 52, 'RESUME', () => { state = 'play'; }, '#1f8f7a', 20);
   button(LW / 2 - 100, 268, 200, 46, muted ? 'SOUND: OFF' : 'SOUND: ON', () => { muted = !muted; }, '#3a4560', 16);
@@ -1229,6 +1447,20 @@ function drawPause() {
 function drawEnd(won) {
   const g = G;
   overlay(0.8);
+  if (land) {
+    const cl = SA.l + (LW - SA.l - SA.r) * 0.35, cr = SA.l + (LW - SA.l - SA.r) * 0.8, nb = g.newBest || [];
+    txt(won ? 'VICTORY!' : 'YOU DIED', cl, SA.t + 34, 38, won ? '#ffb23e' : '#ff5a6e', 'center', '900');
+    txt(won ? 'The Warden has fallen.' : 'Reached ' + (g.room === BOSS_ROOM ? 'the boss' : 'room ' + g.room + ' of 5'), cl, SA.t + 66, 14, '#cfd6e6', 'center', '600');
+    rr(cl - 170, SA.t + 84, 340, 170, 14); ctx.fillStyle = 'rgba(255,255,255,0.07)'; ctx.fill();
+    [['Time', fmt(g.time), nb.indexOf('time') >= 0], ['Kills', String(g.kills), nb.indexOf('kills') >= 0], ['Damage dealt', Math.round(g.dmgDealt).toLocaleString(), nb.indexOf('dmg') >= 0],
+      ['Weapons found', String(g.found)], ['Perks taken', String(g.perksTaken.length)], ['Furthest room', won ? 'Boss defeated' : (g.room === BOSS_ROOM ? 'Boss' : g.room + ' / 5'), nb.indexOf('room') >= 0]]
+      .forEach((r, i) => statRow(r[0], r[1], SA.t + 106 + i * 26, r[2], cl - 152, cl + 152));
+    if (nb.length) txt('★ NEW PERSONAL BEST ★', cl, SA.t + 276, 14, '#ffe066', 'center', '800');
+    txt('Best: room ' + (best.bestRoom >= 6 ? 'Boss' : best.bestRoom) + ' · ' + best.mostKills + ' kills' + (best.bestTime ? ' · win in ' + fmt(best.bestTime) : ''), cl, SA.t + 300, 11.5, '#9aa4bd', 'center', '600', false);
+    button(cr - 100, SA.t + 120, 200, 54, 'RUN AGAIN', () => newRun(), '#1f8f7a', 20);
+    button(cr - 100, SA.t + 188, 200, 44, 'MENU', () => { state = 'menu'; G = null; resize(); }, '#3a4560', 16);
+    return;
+  }
   txt(won ? 'VICTORY!' : 'YOU DIED', LW / 2, 100, 44, won ? '#ffb23e' : '#ff5a6e', 'center', '900');
   txt(won ? 'The Warden has fallen.' : 'Reached ' + (g.room === BOSS_ROOM ? 'the boss' : 'room ' + g.room + ' of 5'), LW / 2, 140, 15, '#cfd6e6', 'center', '600');
   rr(28, 168, LW - 56, 200, 14); ctx.fillStyle = 'rgba(255,255,255,0.07)'; ctx.fill();
@@ -1283,5 +1515,6 @@ requestAnimationFrame(frame);
 // small hook for automated tests / debugging
 window.TDR = {
   get state() { return state; }, get G() { return G; }, newRun, update, render, takePerk, endRun, genWeapon, startRoom,
-  setState(s) { state = s; }, best: () => best, hot: () => hot
+  setState(s) { state = s; }, best: () => best, hot: () => hot, pickup: pickupNear, layout, resize,
+  get land() { return land; }, SA, ARENA, get LW() { return LW; }, get LH() { return LH; }
 };
