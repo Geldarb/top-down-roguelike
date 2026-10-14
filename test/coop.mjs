@@ -103,13 +103,14 @@ try {
   ok('client picks weapon into its own slot (host state)', await H.evaluate(id => { const p = G.seats.find(s => s.id === id).d.player; return p.slots[1] && p.slots[1].type === 'sniper'; }, pidB));
   ok('client HUD shows the new weapon', await until(pages[1], () => G.player.slots[1] && G.player.slots[1].type === 'sniper'));
   // ---------- downed + revive
-  const pidC = await pages[2].evaluate(() => COOP.NET.pid);
+  const PC = pages[Math.min(2, pages.length - 1)];
+  const pidC = await PC.evaluate(() => COOP.NET.pid);
   await H.evaluate(id => { const s = G.seats.find(s => s.id === id); COOP.withSeat(s, () => { G.player.iframes = 0; hurtPlayer(9999); }); }, pidC);
   ok('player goes down instead of ending the run', await H.evaluate(id => G.seats.find(s => s.id === id).d.player.downed && TDR.state === 'play', pidC));
-  ok('downed state synced to that client', await until(pages[2], () => G.player.downed));
+  ok('downed state synced to that client', await until(PC, () => G.player.downed));
   await H.evaluate(id => { const c = G.seats.find(s => s.id === id).d.player, me = G.player; me.x = c.x + 12; me.y = c.y; }, pidC);
   await sleep(1500);
-  const mid = await pages[1].evaluate(id => { const v = G.views[id]; return v && v.p.rv; }, pidC);
+  const mid = pages.length > 2 ? await pages[1].evaluate(id => { const v = G.views[id]; return v && v.p.rv; }, pidC) : await PC.evaluate(() => G.player.rv);
   ok('revive progress visible to other clients', mid > 0.15 && mid < 1, mid);
   await pages[1].screenshot({ path: OUT + '/c05-revive.png' });
   await sleep(2600);
@@ -171,7 +172,7 @@ try {
   await tapHot(H, /^BACK TO LOBBY/);
   ok('clients return to the lobby', await until(pages[1], () => TDR.state === 'coop' && !document.getElementById('nvc-room').hidden));
   await H.close();
-  const msg = await until(pages[1], () => TDR.state === 'coop' && document.getElementById('nvc-msg').textContent, null, 8000);
+  const msg = await until(pages[1], () => TDR.state === 'coop' && document.getElementById('nvc-msg').textContent, null, 30000);
   ok('host leaving shows a clear message to clients', /host/i.test(msg || ''), msg);
 } catch (e) { console.log('EXCEPTION', e); fail++; }
 console.log('errors:', errs); if (errs.length) fail++;

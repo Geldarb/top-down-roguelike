@@ -444,6 +444,8 @@ function netConnect(first) {
   });
 }
 setInterval(() => { if (NET.ws && NET.ws.readyState === 1) netSend({ t: 'ping', c: performance.now() }); }, 2000);
+// closing/navigating away: tell the server right away instead of waiting for the socket to time out
+addEventListener('pagehide', e => { if (!e.persisted && NET.ws && NET.ws.readyState === 1) { try { NET.ws.send(JSON.stringify({ t: 'leave' })); } catch (err) { /* ignore */ } } });
 function netMsg(m) {
   switch (m.t) {
     case 'joined':

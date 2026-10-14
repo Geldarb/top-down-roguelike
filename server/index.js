@@ -137,7 +137,7 @@ wss.on('connection', ws => {
   });
 });
 
-setInterval(() => { wss.clients.forEach(ws => { if (!ws.alive) { ws.terminate(); return; } ws.alive = false; try { ws.ping(); } catch (e) { /* ignore */ } }); }, 20000);
+setInterval(() => { wss.clients.forEach(ws => { if (!ws.alive) { ws.terminate(); return; } ws.alive = false; try { ws.ping(); } catch (e) { /* ignore */ } }); }, 10000);
 setInterval(() => { const now = Date.now(); rooms.forEach(r => { if (!r.players.some(p => p.ws) && now - r.created > 60000) rooms.delete(r.code); }); }, 60000);
 
 server.listen(PORT, () => console.log('Neon Vault co-op server on :' + PORT));
