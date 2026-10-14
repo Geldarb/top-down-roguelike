@@ -88,14 +88,14 @@ const PERKS = [
   PK('trigger', 'Hair Trigger', 'epic', 2, '⚡', '#ff9a3c', 'Overcharged: triggers every shot sooner (-1 shot)', P => { P.overN = Math.max(3, P.overN - 1); }, { aff: 'overcharged' }),
   PK('curse', 'Curse Mastery', 'rare', 2, '☾', '#ff6a8a', 'Cursed: take 18% less of the curse penalty', P => { P.curseRed += 0.18; }, { aff: 'cursed' }),
   PK('needle', 'Needle Rounds', 'rare', 2, '↟', '#8fe3ff', 'Piercing: pierce 1 more and +10% damage', P => { P.pierceAff += 1; P.dmg += 0.10; }, { aff: 'piercing' }),
-  // ---- class synergy (only offered to that class)
-  PK('c_runner', 'Overload Mastery', 'rare', 2, '⌖', '#19f0ff', 'Overload fires 24 bullets and hastes you for 5s', P => { P.runnerPlus += 1; }, { cls: 'runner' }),
-  PK('c_breacher', 'Concussive Blast', 'rare', 2, '◉', '#ff8a1f', 'Shockwave: +30% radius and +1s stun', P => { P.breachPlus += 1; }, { cls: 'breacher' }),
-  PK('c_phantom', 'Deep Cover', 'rare', 2, '◇', '#a65bff', 'Ambush shot x4.5 and Decoy lasts 3s longer', P => { P.phantomPlus += 1; }, { cls: 'phantom' }),
-  PK('c_overclock', 'Meltdown', 'epic', 1, '☢', '#ff2a3d', 'Adrenaline +40% and Redline costs only 7 HP', P => { P.ocPlus += 1; }, { cls: 'overclock' }),
-  PK('c_daemon', 'Dual Core', 'rare', 2, '▥', '#39ff6a', 'One more turret at once and +25% turret damage', P => { P.turretPlus += 1; }, { cls: 'daemon' }),
-  PK('c_blackout', 'Carpet Bombing', 'epic', 1, '☄', '#ffe81a', 'Orbital Strike is 30% wider and fires twice', P => { P.strikePlus += 1; }, { cls: 'blackout' }),
-  PK('c_glitch', 'Fractal Luck', 'rare', 2, '⌬', '#ff3df0', 'Pickups reroll 90% of the time, Reroll cooldown -25%', P => { P.glitchPlus += 1; }, { cls: 'glitch' })
+  // ---- class synergy (only offered to that class, once its skill is unlocked)
+  PK('c_runner', 'Overload Mastery', 'rare', 2, '⌖', '#19f0ff', 'Skill power +25% and skill recharges 10% faster', P => { P.skPow += 0.25; P.skillCd *= 0.9; }, { cls: 'runner' }),
+  PK('c_breacher', 'Concussive Core', 'rare', 2, '◉', '#ff8a1f', 'Skill power +25% and +15% knockback', P => { P.skPow += 0.25; P.knock += 0.15; }, { cls: 'breacher' }),
+  PK('c_phantom', 'Deep Cover', 'rare', 2, '◇', '#a65bff', 'Skill effects last 1.5s longer and ambush shots +0.5x', P => { P.skDur += 1.5; P.dashAmbush += 0.5; }, { cls: 'phantom' }),
+  PK('c_overclock', 'Meltdown Core', 'epic', 1, '☢', '#ff2a3d', 'Adrenaline +25% and skill power +30%', P => { P.adren += 0.25; P.skPow += 0.3; }, { cls: 'overclock' }),
+  PK('c_daemon', 'Dual Core', 'rare', 2, '▥', '#39ff6a', 'Constructs +25% damage and last 20% longer', P => { P.turretDmg += 0.25; P.turretLife += 0.2; }, { cls: 'daemon' }),
+  PK('c_blackout', 'Carpet Bombing', 'epic', 1, '☄', '#ffe81a', 'Skill fires one extra strike / line / volley', P => { P.skCount += 1; }, { cls: 'blackout' }),
+  PK('c_glitch', 'Fractal Luck', 'rare', 2, '⌬', '#ff3df0', 'Skill recharges 25% faster, +20% pickup reroll chance', P => { P.skillCd *= 0.75; P.glitchPick += 0.2; }, { cls: 'glitch' })
 ];
 const PERK_BY_ID = {}; PERKS.forEach(p => { PERK_BY_ID[p.id] = p; });
 
@@ -133,29 +133,14 @@ const ENEMY_TYPES = {
   node:    { name: 'Shield Node',    hp: 360, speed: 0,  r: 14, dmg: 10, color: '#ffe9a0', cost: 0, fixed: true }
 };
 
-// ---------- Classes: starting weapon, passive and one active skill each ----------
-// start: weapon type (null = random); skill cd in seconds
+// ---------- Classes: every class starts with a common pistol and no skill; skills + passives live in the class tree (js/trees.js)
 const CLASSES = [
-  { id: 'runner',    name: 'Runner',    color: '#19f0ff', start: 'pistol',   tag: 'Fast hands, sharp shots',
-    passive: 'Gunslinger', pdesc: '+15% crit chance',
-    skill: 'Overload', sdesc: 'Burst of shots in all directions, flushes heat: dash resets and fire rate +30% for 3s', cd: 9 },
-  { id: 'breacher',  name: 'Breacher',  color: '#ff8a1f', start: 'shotgun',  tag: 'Close-range door kicker',
-    passive: 'Slug Core', pdesc: 'Pellets pierce one enemy',
-    skill: 'Shockwave', sdesc: 'Blast that knocks back and stuns nearby enemies', cd: 10 },
-  { id: 'phantom',   name: 'Phantom',   color: '#a65bff', start: 'sniper',   tag: 'Strike from the shadows',
-    passive: 'Ambush', pdesc: 'First shot after a dash deals triple damage',
-    skill: 'Decoy', sdesc: 'Hologram lures enemies for 5s while you reposition', cd: 12 },
-  { id: 'overclock', name: 'Overclock', color: '#ff2a3d', start: 'smg',      tag: 'Burn bright, burn fast',
-    passive: 'Adrenaline', pdesc: 'Damage rises as your health drops (up to +80%)',
-    skill: 'Redline', sdesc: 'Double fire rate for 5s, costs 15 HP', cd: 12 },
-  { id: 'daemon',    name: 'Daemon',    color: '#39ff6a', start: 'crossbow', tag: 'Let the machines work',
-    passive: 'Long Uptime', pdesc: 'Your turrets last 75% longer',
-    skill: 'Turret', sdesc: 'Plant a turret that copies your weapon and its affixes', cd: 11 },
-  { id: 'blackout',  name: 'Blackout',  color: '#ffe81a', start: 'launcher', tag: 'Fire from above',
-    passive: 'Thermite', pdesc: 'Burning and Explosive affixes are 50% stronger',
-    skill: 'Orbital Strike', sdesc: 'Plasma blast on the densest enemy cluster', cd: 13 },
-  { id: 'glitch',    name: 'Glitch',    color: '#ff3df0', start: null,       tag: 'Reality is a suggestion',
-    passive: 'Corrupted Luck', pdesc: '4 perk choices; picked-up weapons may reroll an affix',
-    skill: 'Reroll', sdesc: 'Rerolls the affixes of your equipped weapon', cd: 20 }
+  { id: 'runner',    name: 'Runner',    color: '#19f0ff', tag: 'Fast hands, sharp shots',   branches: 'Gunplay · Speed · Overload' },
+  { id: 'breacher',  name: 'Breacher',  color: '#ff8a1f', tag: 'Close-range door kicker',   branches: 'Demolition · Bulwark · Close Quarters' },
+  { id: 'phantom',   name: 'Phantom',   color: '#a65bff', tag: 'Strike from the shadows',   branches: 'Marksman · Shadow · Hologram' },
+  { id: 'overclock', name: 'Overclock', color: '#ff2a3d', tag: 'Burn bright, burn fast',    branches: 'Burnout · Velocity · Meltdown' },
+  { id: 'daemon',    name: 'Daemon',    color: '#39ff6a', tag: 'Let the machines work',     branches: 'Network · Payload · Firewall' },
+  { id: 'blackout',  name: 'Blackout',  color: '#ffe81a', tag: 'Fire from above',           branches: 'Thermite · Artillery · Fallout' },
+  { id: 'glitch',    name: 'Glitch',    color: '#ff3df0', tag: 'Reality is a suggestion',   branches: 'Entropy · Luck · Corruption' }
 ];
 const CLASS_BY_ID = {}; CLASSES.forEach(c => { CLASS_BY_ID[c.id] = c; });

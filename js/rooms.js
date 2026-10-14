@@ -54,6 +54,8 @@ function startRoom(n, forceKind) {
   g.bulMul = Math.min(1.8, 1 + 0.12 * lp) * (g.hardOn ? 1.2 : 1);
   g.credMul = (1 + 0.15 * lp) * (g.hardOn ? 1.5 : 1);
   g.loopLuck = 0.35 * lp;
+  const rs = roomSize(cur); setRoomSize(rs.w, rs.h);
+  g.areaK = (ARENA.w * ARENA.h) / 134000;            // how much bigger than the old one-screen arena this room is
   genPillars(cur);
   setupHazardLayout(cur);
   forEachSeat((i, n) => { const p = G.player; p.x = ARENA.x + ARENA.w / 2 + (i - (n - 1) / 2) * 30; p.y = ARENA.y + ARENA.h - 34; p.vx = p.vy = 0; p.dashT = 0; p.iframes = 1;
@@ -74,9 +76,9 @@ function startRoom(n, forceKind) {
       break; }
     case 'gauntlet':
       g.gaunt = { t: GAUNT_TIME, max: GAUNT_TIME, next: GAUNT_GAP, waves: 0 };
-      spawnList(genWave(cur.zone, n, 5 + 0.7 * n)); g.gaunt.waves = 1; spawnSentries(); break;
+      spawnList(genWave(cur.zone, n, (5 + 0.7 * n) * 1.3)); g.gaunt.waves = 1; spawnSentries(); break;
     case 'elite': {
-      const e = addEnemy('elite', ARENA.x + ARENA.w / 2, ARENA.y + 100, g.hpMul);
+      const e = addEnemy('elite', ARENA.x + ARENA.w / 2, ARENA.y + ARENA.h * 0.35, g.hpMul);
       e.elite = true; e.title = ELITE_NAMES[cur.zone] || 'Elite'; e.color = ZONES[cur.zone].col; e.spawnT = 1.2; e.atk = 2; e.n = 0;
       g.banner.sub = 'ELITE: ' + e.title; break; }
     case 'shop': forEachSeat(() => setupShop()); break;
@@ -91,9 +93,9 @@ function genPillars(cur) {
   if (cur.boss === 'boss') { g.pillars.push({ x: ARENA.x + 50, y: my - 20, w: 30, h: 40 }, { x: ARENA.x + ARENA.w - 80, y: my - 20, w: 30, h: 40 }); return; }
   if (cur.boss === 'sentinel') return;
   if (cur.boss === 'twin') { g.pillars.push({ x: ARENA.x + 46, y: my - 22, w: 30, h: 44, mirror: true }, { x: ARENA.x + ARENA.w - 76, y: my - 22, w: 30, h: 44, mirror: true }); return; }
-  const count = cur.zone === 4 ? rint(3, 4) : rint(2, 4);
+  const count = Math.round((cur.zone === 4 ? rint(3, 4) : rint(2, 4)) * Math.min(2.6, 0.55 * (G.areaK || 1)) + (cur.kind === 'elite' ? 0 : 1));
   let tries = 0;
-  while (g.pillars.length < count && tries++ < 80) {
+  while (g.pillars.length < count && tries++ < 200) {
     const w = rint(26, 62), h = rint(26, 62);
     const x = rnd(ARENA.x + 30, ARENA.x + ARENA.w - 30 - w), y = rnd(ARENA.y + 70, ARENA.y + ARENA.h - 90 - h);
     if (x < cx + 44 && x + w > cx - 44) { if (y < ARENA.y + 110) continue; }    // keep door lane free
@@ -110,17 +112,17 @@ function setupHazardLayout(cur) {
   if (cur.boss || cur.kind === 'shop' || cur.kind === 'risk') return;
   const cx = ARENA.x + ARENA.w / 2;
   if (z === 2) {              // toggling laser walls with a gap; ICE sentries guard the gap
-    const walls = (cur.rn === 1 || cur.kind === 'elite') ? 1 : 2;
+    const walls = (cur.rn === 1 || cur.kind === 'elite') ? 2 : 3;
     g.sentries = [];
     for (let i = 0; i < walls; i++) {
-      const y = ARENA.y + ARENA.h * (i === 0 ? 0.40 : 0.66), gw = 84;
+      const y = ARENA.y + ARENA.h * [0.30, 0.55, 0.76][walls === 2 ? [0, 2][i] : i], gw = 90;
       const gx = rnd(ARENA.x + 36, ARENA.x + ARENA.w - 36 - gw), ph = rnd(0, 4.4);
       g.lasers.push({ x1: ARENA.x, y1: y, x2: gx, y2: y, ph, per: 4.4, on: 1.5, warn: 0.9 }, { x1: gx + gw, y1: y, x2: ARENA.x + ARENA.w, y2: y, ph, per: 4.4, on: 1.5, warn: 0.9 });
       g.pillars = g.pillars.filter(q => !(q.y < y + 28 && q.y + q.h > y - 28));
       if (cur.kind !== 'elite') { g.sentries.push({ x: gx - 16, y: y - 22 }); if (i === 0) g.sentries.push({ x: gx + gw + 16, y: y - 22 }); }
     }
   } else if (z === 3) {       // slow corrupted data pools
-    const n = rint(2, 3); let tries = 0;
+    const n = Math.round(rint(2, 3) * Math.min(2.5, 0.6 * (g.areaK || 1))); let tries = 0;
     while (g.pools.length < n && tries++ < 50) {
       const r = rint(30, 46), x = rnd(ARENA.x + r, ARENA.x + ARENA.w - r), y = rnd(ARENA.y + r + 40, ARENA.y + ARENA.h - r - 60);
       if (Math.hypot(x - cx, y - (ARENA.y + ARENA.h - 34)) < r + 60) continue;
@@ -130,7 +132,7 @@ function setupHazardLayout(cur) {
     }
   } else if (z === 4) {       // glitching floor tiles
     const T = 28, cols = Math.floor(ARENA.w / T), rows = Math.floor(ARENA.h / T);
-    for (let k = 0; k < 4; k++) {
+    for (let k = 0; k < Math.round(4 * Math.min(2.5, 0.6 * (g.areaK || 1))); k++) {
       const c0 = rint(1, cols - 4), r0 = rint(2, rows - 5), w = rint(2, 3), h = 2, ph = rnd(0, 5);
       const tx = ARENA.x + c0 * T, ty = ARENA.y + r0 * T;
       if (tx < cx + 60 && tx + w * T > cx - 60 && (ty < ARENA.y + 90 || ty + h * T > ARENA.y + ARENA.h - 100)) continue;       // keep door lane + start clear
@@ -178,13 +180,13 @@ function genWave(z, s, budget) {
     const t = pick(pool);
     if (t === 'swarm') { const k = rint(5, 7); for (let i = 0; i < k; i++) list.push('swarm'); b -= 3; }
     else { list.push(t); b -= ENEMY_TYPES[t].cost; }
-    if (list.length > 18) break;
+    if (list.length > 24) break;
   }
   if (!list.length) list.push('chaser');
   return list;
 }
 function genWaves(cur) {
-  const s = G.room, budget = (10 + 2.2 * s) * (cur.kind === 'vault' ? 0.8 : 1), nW = (cur.kind === 'vault' || s <= 2) ? 2 : 3, waves = [];
+  const s = G.room, budget = (10 + 2.2 * s) * (cur.kind === 'vault' ? 0.8 : 1) * 1.4, nW = (cur.kind === 'vault' || s <= 2) ? 2 : 3, waves = [];
   for (let w = 0; w < nW; w++) waves.push(genWave(cur.zone, s, budget / nW * (w === nW - 1 ? 1.1 : 0.95)));
   return waves;
 }
@@ -193,8 +195,8 @@ function spawnList(list) {
   const g = G; let cluster = null;
   list.forEach(t => {
     let s;
-    if (t === 'swarm') { if (!cluster) cluster = freeSpot(150, 30); s = { x: cluster.x + rnd(-26, 26), y: cluster.y + rnd(-26, 26) }; }
-    else { s = freeSpot(140, ENEMY_TYPES[t].r); cluster = null; }
+    if (t === 'swarm') { if (!cluster) cluster = freeSpot(170, 30, 400); s = { x: cluster.x + rnd(-26, 26), y: cluster.y + rnd(-26, 26) }; }
+    else { s = freeSpot(160, ENEMY_TYPES[t].r, 420); cluster = null; }
     s.x = clamp(s.x, ARENA.x + 10, ARENA.x + ARENA.w - 10); s.y = clamp(s.y, ARENA.y + 10, ARENA.y + ARENA.h - 10);
     const e = addEnemy(t, s.x, s.y);
     if (g.zone === 4 && t !== 'swarm' && Math.random() < 0.28) {            // Mirror Mainframe: enemy clones appear across the mirror line
@@ -206,15 +208,15 @@ function spawnList(list) {
 function spawnBossFor(kind) {
   const g = G, cx = ARENA.x + ARENA.w / 2, bm = g.bossMul;
   const mk = (type, x, y, hm, title) => { const e = addEnemy(type, x, y, hm); e.boss = true; e.title = title; e.spawnT = 1.4; e.phase = 1; e.pat = 0; e.atk = 2.2; e.state = 0; g.boss = e; return e; };
-  if (kind === 'boss') { mk('boss', cx, ARENA.y + 90, bm, 'THE ADMIN'); }
+  if (kind === 'boss') { mk('boss', cx, ARENA.y + ARENA.h * 0.3, bm, 'THE ADMIN'); }
   else if (kind === 'sentinel') {
-    const e = mk('sentinel', cx, ARENA.y + 96, bm, 'SENTINEL'); e.rot = 0; e.shields = [{ off: 0, span: 1.9 }, { off: Math.PI, span: 1.9 }]; e.atk = 2.6;
+    const e = mk('sentinel', cx, ARENA.y + ARENA.h * 0.34, bm, 'SENTINEL'); e.rot = 0; e.shields = [{ off: 0, span: 1.9 }, { off: Math.PI, span: 1.9 }]; e.atk = 2.6;
   } else if (kind === 'twin') {
     const p = g.player, w = cloneWeapon(p.slots[p.active] || p.slots[0], 1), C = g.C;
     const hp = clamp(1050 + weaponDps(w) * 11, 1300, 2600) * bm / 1;
-    const e = mk('twin', cx, ARENA.y + 90, 1, 'MIRROR TWIN'); e.max = e.hp = hp * coopHpMul(); e.w = w; e.cls = C.id; e.color = C.color; e.atk = 2; e.fcd = 1.6; e.skCd = 4.5; e.dir = 1; e.dirT = 2; e.dmg = 15; e.r = 11;
+    const e = mk('twin', cx, ARENA.y + ARENA.h * 0.3, 1, 'MIRROR TWIN'); e.max = e.hp = hp * coopHpMul(); e.w = w; e.cls = C.id; e.color = C.color; e.atk = 2; e.fcd = 1.6; e.skCd = 4.5; e.dir = 1; e.dirT = 2; e.dmg = 15; e.r = 11;
   } else if (kind === 'root') {
-    const e = mk('root', cx, ARENA.y + 82, bm, 'ROOT'); e.spawnT = 2.0; e.sumT = 3.5; e.orb = 0; e.nodes = []; e.atk = 2.2; e.fixed = true;
+    const e = mk('root', cx, ARENA.y + ARENA.h * 0.36, bm, 'ROOT'); e.spawnT = 2.0; e.sumT = 3.5; e.orb = 0; e.nodes = []; e.atk = 2.2; e.fixed = true;
     e.dmg = 22;
   }
 }
@@ -398,7 +400,7 @@ function rootPhase2(e) {
 function rootPhase3(e) {
   const g = G, cx = ARENA.x + ARENA.w / 2, R0 = Math.min(ARENA.w, ARENA.h) / 2 - 6;
   e.phase = 3; e.invuln = false; e.state = 0; e.atk = 1.8; e.warn = false; g.ebullets.length = 0; shake(12);
-  g.safe = { on: true, cx, cy: ARENA.y + ARENA.h * 0.56, r: R0, min: R0 * 0.42, rate: R0 * 0.58 / 30, delay: 1.6, tick: 0.6 };
+  g.safe = { on: true, cx, cy: ARENA.y + ARENA.h * 0.56, r: R0, min: R0 * 0.36, rate: R0 * 0.64 / 30, delay: 1.6, tick: 0.6 };
   g.banner = { text: 'PHASE 3', sub: 'Core overload: stay inside the safe zone', t: 2.6, col: '#ff6a3c' };
   ring(e.x, e.y, 180, '#ff6a3c', 0.7);
 }
@@ -423,7 +425,7 @@ function updateRoot(dt) {
   const ph = e.phase;
   if (ph === 2) {
     e.nodes = e.nodes.filter(n => !n.dead);
-    e.nodes.forEach(n => { const a = e.orb + n.idx * Math.PI / 2; n.x = e.x + Math.cos(a) * 100; n.y = e.y + Math.sin(a) * 100; });
+    e.nodes.forEach(n => { const a = e.orb + n.idx * Math.PI / 2; n.x = e.x + Math.cos(a) * 125; n.y = e.y + Math.sin(a) * 125; });
     if (!e.nodes.length) { rootPhase3(e); return; }
   }
   // pattern machine
@@ -446,7 +448,7 @@ function updateRoot(dt) {
     e.sumT -= dt;
     if (e.sumT <= 0) {
       e.sumT = ph === 1 ? 8 : 10;
-      if (aliveEnemies() <= 6 + (ph === 2 ? 4 : 0)) { const list = ph === 1 ? ['chaser', 'chaser', 'chaser', 'swarm', 'swarm', 'swarm', 'swarm', 'swarm'] : ['chaser', 'chaser']; spawnList(list); g.banner = { text: 'DRONES INCOMING', t: 1.0, col: '#ff6a6a' }; }
+      if (aliveEnemies() <= 8 + (ph === 2 ? 4 : 0)) { const list = ph === 1 ? ['chaser', 'chaser', 'chaser', 'chaser', 'swarm', 'swarm', 'swarm', 'swarm', 'swarm', 'swarm'] : ['chaser', 'chaser', 'chaser']; spawnList(list); g.banner = { text: 'DRONES INCOMING', t: 1.0, col: '#ff6a6a' }; }
     }
   }
 }
@@ -470,7 +472,7 @@ function softBanner(b) { const g = G; if (g.banner && g.banner.zone && g.banner.
 function roomCleared() {
   const g = G, cur = g.cur, k = cur.kind;
   g.roomState = 'clear'; g.clearT = 0.9; g.perkDone = false;
-  const cx = ARENA.x + ARENA.w / 2, cy = ARENA.y + ARENA.h * 0.42;
+  const pc = playersPos()[0] || g.player, cx = clamp(pc.x, ARENA.x + 40, ARENA.x + ARENA.w - 40), cy = clamp(pc.y - 60, ARENA.y + 50, ARENA.y + ARENA.h - 40);
   if (k === 'vault') { g.chests.forEach(c => { c.locked = false; }); g.banner = { text: 'VAULT UNLOCKED', sub: 'Open the chest', t: 1.8, col: '#ffe81a' }; }
   else {
     if (!cur.boss && k !== 'elite') {
@@ -483,6 +485,7 @@ function roomCleared() {
   if (g.gaunt) { const bonus = 30 + g.room * 3; for (let i = 0; i < 5; i++) spawnCredit(cx + rnd(-30, 30), cy + rnd(-20, 20), bonus / 5); g.banner = { text: 'GAUNTLET SURVIVED', sub: '+' + Math.round(bonus * (1 + g.P.credit) * g.credMul) + ' bonus credits', t: 1.8, col: '#ff5a3c' }; }
   g.items.forEach(it => { if (it.kind === 'credit') it.fly = true; });
   forEachSeat(() => { const p = G.player; if (p.downed) { p.downed = false; p.rv = 0; p.hp = Math.round(G.P.maxHp * 0.3); p.iframes = 1.5; } else p.hp = Math.min(G.P.maxHp, p.hp + 8 + G.P.clearHeal); });
+  forEachSeat(() => gainXp(6 + 2 * g.room + (cur.boss ? 20 : 0)));
   sfx('clear', 520, 0.4, 'triangle', 0.07, 2.2);
   g.ebullets.length = 0;
 }
@@ -525,7 +528,7 @@ function updateRoomFlow(dt) {
       const ga = g.gaunt;
       if (ga.t > 0) {
         ga.t -= dt; ga.next -= dt;
-        if ((ga.next <= 0 || (alive <= 1 && ga.next < GAUNT_GAP - 1.5)) && alive < 20) { spawnList(genWave(cur.zone, g.room, 5 + 0.7 * g.room)); ga.waves++; ga.next = GAUNT_GAP; softBanner({ text: 'WAVE ' + ga.waves, t: 0.9, col: '#ff5a3c' }); sfx('clear', 300, 0.2, 'sawtooth', 0.04, 1.6); }
+        if ((ga.next <= 0 || (alive <= 1 && ga.next < GAUNT_GAP - 1.5)) && alive < 26) { spawnList(genWave(cur.zone, g.room, (5 + 0.7 * g.room) * 1.3)); ga.waves++; ga.next = GAUNT_GAP; softBanner({ text: 'WAVE ' + ga.waves, t: 0.9, col: '#ff5a3c' }); sfx('clear', 300, 0.2, 'sawtooth', 0.04, 1.6); }
       } else if (alive === 0) roomCleared();
     }
     else if (alive === 0) {
@@ -610,13 +613,13 @@ function perkEligible(min) {
   const g = G, P = g.P, eq = g.player.slots.filter(Boolean);
   return PERKS.filter(pk => {
     if ((g.perkCount[pk.id] || 0) >= pk.max || g.banished[pk.id]) return false;
-    if (pk.cls && pk.cls !== P.cls) return false;
+    if (pk.cls && (pk.cls !== P.cls || !g.skill)) return false;
     if (pk.aff && !eq.some(w => w.fx[pk.aff])) return false;
     return TIER_IDX[pk.tier] >= (min || 0);
   });
 }
 function pickPerks(n, exclude, min, luckBonus) {
-  const g = G, lk = g.P.luck + g.loopLuck + (luckBonus || 0);
+  const g = G, lk = g.P.luck + g.loopLuck + (luckBonus || 0) + (g.P.perkLuck || 0);
   let pool = perkEligible(min).filter(p => exclude.indexOf(p.id) < 0);
   if (pool.length < n) perkEligible(0).forEach(p => { if (exclude.indexOf(p.id) < 0 && pool.indexOf(p) < 0 && pool.length < n) pool.push(p); });
   const out = [];
@@ -630,7 +633,7 @@ function pickPerks(n, exclude, min, luckBonus) {
 }
 function offerPerks(opts) {
   opts = opts || {};
-  const g = G, n = g.P.cls === 'glitch' ? 4 : 3;
+  const g = G, n = 3 + (g.P.extraPerk || 0);
   resetJoy();
   g.perkMode = opts.mode || 'room'; g.perkMin = opts.min || 0; g.banishMode = false;
   g.perkOffer = pickPerks(n, [], g.perkMin, opts.boss ? 0.5 : 0); state = 'perk';
@@ -673,13 +676,13 @@ function drawRoomIcon(kind, x, y, r, col) {
   ctx.restore();
 }
 function drawRoomChips(t) {
-  const g = G, cx = ARENA.x + ARENA.w / 2;
+  const g = G, cx = VIEW.x + VIEW.w / 2;
   if (g.doorOpen && g.plan[g.room] && state === 'play') {            // door shows what is behind it
     const nx = g.plan[g.room], k = nx.boss ? 'boss' : nx.kind, K = ROOM_KINDS[k], lab = nx.boss ? (nx.boss === 'root' ? 'ROOT' : BOSS_NAMES[nx.boss]) : K.name;
-    rr(cx - 62, ARENA.y + 30, 124, 22, 11); ctx.fillStyle = 'rgba(6,9,22,0.85)'; ctx.fill(); nstroke(K.col, 1.2, 0.8);
-    drawRoomIcon(k, cx - 46, ARENA.y + 41, 6, K.col); fitTxt('NEXT: ' + lab, cx + 6, ARENA.y + 41.5, 88, 10.5, '#fff', 'center', '800');
+    rr(cx - 62, VIEW.y + 30, 124, 22, 11); ctx.fillStyle = 'rgba(6,9,22,0.85)'; ctx.fill(); nstroke(K.col, 1.2, 0.8);
+    drawRoomIcon(k, cx - 46, VIEW.y + 41, 6, K.col); fitTxt('NEXT: ' + lab, cx + 6, VIEW.y + 41.5, 88, 10.5, '#fff', 'center', '800');
   }
-  if (!g.boss && g.cur) { const K = ROOM_KINDS[g.cur.kind]; drawRoomIcon(g.cur.kind, ARENA.x + 14, ARENA.y + 14, 6, K.col); txt(K.name, ARENA.x + 25, ARENA.y + 14.5, 10, K.col, 'left', '800', false); }
+  if (!g.boss && g.cur) { const K = ROOM_KINDS[g.cur.kind]; drawRoomIcon(g.cur.kind, VIEW.x + 14, VIEW.y + 14, 6, K.col); txt(K.name, VIEW.x + 25, VIEW.y + 14.5, 10, K.col, 'left', '800', false); }
 }
 function drawHazardsUnder(t) {
   const g = G;

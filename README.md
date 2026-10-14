@@ -12,7 +12,8 @@ A short-run, loot-driven **neon top-down roguelike shooter** you can play with *
 | Move | Drag anywhere (floating joystick) | WASD / arrows |
 | Aim / fire | Automatic | Automatic |
 | Dash | **DASH** button (same for every class) | Space / Shift |
-| Class skill | **SKILL** button with cooldown ring | Q |
+| Class skill | **SKILL** button with cooldown ring (locked until level 2) | Q |
+| Upgrade tree | ▲ UPGRADE pill / pause → TREE | T |
 | Inspect / pick up weapon | Stand near it, tap **PICK UP** (or **SWAP SLOT 1 / 2** when both slots are full) | E (swaps into the active slot) |
 | Equip slot | Tap weapon slot | 1 / 2 / Tab |
 | Pause | Corner button | Esc / P |
@@ -24,21 +25,34 @@ affix differences) plus the Pick Up / Swap buttons in the right thumb zone. Swap
 Landscape: arena fills the screen, HUD sits in the top bar, joystick on the left, buttons on the right, safe-area insets
 respected, and rotating / resizing mid-run re-lays everything out live (a rotation pauses the run).
 
-## Classes (pick on the class-select screen; last choice is remembered)
+## Classes and upgrade trees (pick on the class-select screen; last choice is remembered)
 
-| Class | Start | Passive | Skill |
-|---|---|---|---|
-| Runner (cyan) | Pistol | +15% crit chance | Overload: 16-way burst, dash reset, +30% fire rate 3s |
-| Breacher (orange) | Shotgun | Pellets pierce one enemy | Shockwave: knockback + stun |
-| Phantom (violet) | Sniper | First shot after a dash deals x3 | Decoy: hologram lures enemies |
-| Overclock (red) | SMG | Damage rises as HP drops (up to +80%) | Redline: 2x fire rate 5s, costs 15 HP |
-| Daemon (green) | Crossbow | Turrets last 75% longer | Turret: copies your weapon + affixes |
-| Blackout (yellow) | Launcher | Burning / Explosive affixes 50% stronger | Orbital Strike on the densest cluster |
-| Glitch (magenta) | Random | 4 perk choices; pickups may reroll an affix | Reroll: new affixes on equipped weapon |
+Every class starts with a **Common Pistol** and **no skill**; the SKILL button stays locked until your first level-up.
+Kills and room clears give XP, levels give skill points. The first point picks 1 of 3 skills; after that you spend points
+in 3 branches of stackable stat nodes (1–5 ranks) and permanent "pick 1 of 3" nodes (augments, capstones).
+Full design: [docs/CLASS_TREES.md](docs/CLASS_TREES.md).
+
+| Class | Branches | Skill options |
+|---|---|---|
+| Runner | Gunplay · Speed · Overload | Overload / Afterburner / Fan the Hammer |
+| Breacher | Demolition · Bulwark · Close Quarters | Shockwave / Breach Charge / Vortex Grenade |
+| Phantom | Marksman · Shadow · Hologram | Decoy / Phase Strike / Cloak |
+| Overclock | Burnout · Velocity · Meltdown | Redline / Overheat Vent / Bloodsurge |
+| Daemon | Network · Payload · Firewall | Turret / Drone Swarm / Logic Bomb |
+| Blackout | Thermite · Artillery · Fallout | Orbital Strike / Napalm Line / Cluster Barrage |
+| Glitch | Entropy · Luck · Corruption | Reroll / Glitch Blink / Chaos Field |
+
+Open the tree from the ▲ UPGRADE pill, the locked skill button, `T`, or pause → **TREE**.
+
+## Rooms and camera
+
+Rooms are about 2–3x the visible area (wide rooms in landscape). A smooth camera follows your player with a slight lead
+in the move direction and is clamped to the room; edge arrows point at off-screen enemies, teammates and loot,
+and a minimap sits in the top-left corner of the play area.
 
 ## Game
 
-* **5 rooms + a boss** (The Admin). Each room has 3 waves; after the room, pick 1 of 3 perks (4 for Glitch) and open the data crate.
+* **5 rooms + a boss** (The Admin). Each room has 3 waves; after the room, pick 1 of 3 perks (4 with Glitch's House Edge) and open the data crate.
 * Enemies: Rogue Drones, Malware swarms, ICE Turrets, Firewalls.
 * Weapons: pistol, shotgun, SMG, sniper, crossbow, launcher in 4 rarities (common to legendary) with 10 affixes
   (ricochet, burning, chain lightning, vampiric, splitting, overcharged, cursed, freezing, explosive, piercing) and combos.

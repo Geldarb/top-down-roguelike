@@ -47,12 +47,19 @@ try {
   // autoplay full run in god mode via fast-forward: through all 14 stages, shops, risk rooms, loop-free
   const res = await page.evaluate(async () => {
     const T = window.TDR; const g0 = T.G; let perks = 0, picked = 0, weapons = new Set(), maxEn = 0; const dirs = ['a', 'd', 'w', 's'];
-    let steps = 0, seen = new Set();
+    let steps = 0, seen = new Set(), spent = 0;
     const key = (k, d) => window.dispatchEvent(new KeyboardEvent(d ? 'keydown' : 'keyup', { key: k }));
     let cur = null; const stages = [], zoneBanners = {}, phases = new Set(), t0 = {}; let shops = 0, risks = 0, credMax = 0;
     while (steps++ < 150000 && T.state !== 'win' && T.state !== 'over') {
       const g = T.G;
       if (steps % 40 === 1) { if (cur) key(cur, false); cur = dirs[Math.floor(Math.random() * 4)]; key(cur, true); }
+      if (T.state === 'pause' || g.pts > 0) { // spend skill points like a player would: skill first, then random open nodes
+        let guard = 0;
+        while (g.pts > 0 && guard++ < 50) { if (!g.skill) { T.spendNode('skill', steps % 3); continue; }
+          const open = T.TREES[g.P.cls].branches.flatMap(b => b.nodes).filter(n => T.nodeState(g, n) === 'open'); if (!open.length) break;
+          const n = open[(steps + guard) % open.length]; T.spendNode(n.id, (steps + guard) % 3); spent++; }
+        if (T.state === 'pause') T.setState('play');
+      }
       if (T.state === 'perk') { perks++; T.takePerk(g.perkOffer[0]); }
       else if (T.state === 'shop') { shops++; for (let i = 0; i < 5; i++) T.buyOffer(i); T.leaveShop(); }
       else if (T.state === 'risk') { risks++; T.riskChoose(risks % 2 ? 0 : 2); }
@@ -77,7 +84,7 @@ try {
     }
     key(cur, false);
     const gg = T.G;
-    return { state: T.state, steps, perks, picked, shops, risks, credMax, weaponsOwned: [...weapons], seenDrops: [...seen].slice(0, 8), maxEn, stages, zoneBanners, phases: [...phases], kills: gg.kills, time: gg.time, clears: gg.clears, best: T.best() };
+    return { state: T.state, steps, perks, picked, shops, risks, credMax, weaponsOwned: [...weapons], seenDrops: [...seen].slice(0, 8), maxEn, stages, zoneBanners, phases: [...phases], kills: gg.kills, time: gg.time, clears: gg.clears, best: T.best(), lvl: gg.lvl, skill: gg.skill, spent, ranks: Object.values(gg.tree).reduce((a, b) => a + b, 0) };
   });
   console.log(JSON.stringify({ ...res, stages: res.stages.map(s => `${s.n}:z${s.zone}:${s.boss || s.kind}`).join(' ') }, null, 1));
   if (res.state !== 'win') fail++;
@@ -92,6 +99,7 @@ try {
     ok('every zone has room variety (>=2 kinds)', [1, 2, 3, 4].every(z => new Set(res.stages.filter(s => s.zone === z).map(s => s.boss ? 'boss' : s.kind)).size >= 2));
     ok('run collected credits, perks, shopped', res.credMax > 50 && res.perks >= 6, { credMax: res.credMax, perks: res.perks });
     ok('victory does not end the run: clears counted, state win', res.clears === 1 && res.state === 'win');
+    ok('full run levels up, picks a skill and fills the tree', res.lvl >= 8 && !!res.skill && res.ranks >= 6, { lvl: res.lvl, skill: res.skill, ranks: res.ranks });
   }
   await sleep(200);
   await page.screenshot({ path: OUT + '/09-end.png' });
@@ -158,7 +166,7 @@ try {
     chk('start run in landscape', (await lp.evaluate(() => TDR.state)) === 'play');
     await lp.evaluate(() => { for (let i = 0; i < 30; i++) TDR.update(1 / 60); G.enemies.length = 0; G.roomState = 'idle'; });
     const geo = await lp.evaluate(() => {
-      const L = layout(), A = ARENA, out = {}; const inside = r => r.x >= 0 && r.y >= 0 && r.x + r.w <= LW && r.y + r.h <= LH;
+      const L = layout(), A = VIEW, out = {}; const inside = r => r.x >= 0 && r.y >= 0 && r.x + r.w <= LW && r.y + r.h <= LH;
       const circ = c => ({ x: c.x - c.r, y: c.y - c.r, w: c.r * 2, h: c.r * 2 });
       const rects = { pause: L.pause, slot0: L.slot[0], slot1: L.slot[1], dash: circ(L.dash), skill: circ(L.skill) };
       out.inside = Object.keys(rects).every(k => inside(rects[k]));
@@ -190,8 +198,8 @@ try {
     // live resize: rotate to portrait mid-run (pauses), back to landscape, arena/entities stay valid
     const before = await lp.evaluate(() => ({ n: G.enemies.length }));
     await lp.setViewport({ width: 390, height: 844, deviceScaleFactor: 2, isMobile: true, hasTouch: true }); await sleep(300);
-    st = await lp.evaluate(() => { const p = G.player; return { land, state: TDR.state, A: { ...ARENA }, inside: p.x >= ARENA.x && p.x <= ARENA.x + ARENA.w && p.y >= ARENA.y && p.y <= ARENA.y + ARENA.h, floorW: G.floor.width, LW, LH }; });
-    chk('rotate to portrait live: layout switches, run paused, player in arena', !st.land && st.state === 'pause' && st.inside && st.floorW === st.LW * 2 && st.A.w < 345, st);
+    st = await lp.evaluate(() => { const p = G.player; return { land, state: TDR.state, A: { ...ARENA }, inside: p.x >= ARENA.x && p.x <= ARENA.x + ARENA.w && p.y >= ARENA.y && p.y <= ARENA.y + ARENA.h, floorW: G.floor.width, V: { ...VIEW }, LW, LH }; });
+    chk('rotate to portrait live: layout switches, run paused, player in arena', !st.land && st.state === 'pause' && st.inside && st.V.w < 345 && st.A.w > 500, st);
     await lp.screenshot({ path: OUT + '/07-rotated-portrait.png' });
     await lp.evaluate(() => TDR.setState('play'));
     await lp.setViewport({ width: 667, height: 375, deviceScaleFactor: 2, isMobile: true, hasTouch: true }); await sleep(300);
@@ -212,67 +220,55 @@ try {
     cp.on('pageerror', e => e5.push(e.message)); cp.on('console', m => { if (m.type() === 'error') e5.push(m.text()); });
     await cp.setViewport({ width: 390, height: 844, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
     await cp.goto(APP + '?god=1', { waitUntil: 'load' }); await sleep(300);
-    chk('7 classes, no Siphon', await cp.evaluate(() => TDR.CLASSES.length === 7 && !TDR.CLASSES.some(c => /siphon/i.test(c.name + c.id + c.skill))));
-    const START = { runner: 'pistol', breacher: 'shotgun', phantom: 'sniper', overclock: 'smg', daemon: 'crossbow', blackout: 'launcher' };
+    chk('7 classes, no Siphon', await cp.evaluate(() => TDR.CLASSES.length === 7 && !TDR.CLASSES.some(c => /siphon/i.test(c.name + c.id))));
+    await cp.evaluate(() => { window.__mk = (x, y, hp) => ({ type: 'chaser', x, y, vx: 0, vy: 0, r: 10, hp: hp || 1e6, max: hp || 1e6, speed: 0, dmg: 0, spawnT: 0, hitT: 0, atk: 9, cd: 99, burn: 0, burnDps: 0, burnTick: 0, slow: 0, state: 0, st: 0, ang: 0, dead: false, wob: 0 });
+      window.__run = (id, sk) => { TDR.newRun(id); const g = G; g.roomState = 'idle'; g.pillars.length = 0; g.enemies.length = 0; if (sk != null) { TDR.gainXp(TDR.xpNeed(g.lvl)); TDR.spendNode('skill', sk); } g.player.skillT = 0; return g; }; });
+    // tree data: >=15 nodes, >=3 choice nodes, 3 skills, 3 branches per class
+    let r = await cp.evaluate(() => TDR.CLASSES.map(c => { const T = TDR.TREES[c.id], ns = T.branches.flatMap(b => b.nodes); return { id: c.id, br: T.branches.length, sk: T.skills.filter(s => TDR.SKILL_DEFS[s]).length, nodes: ns.length + 1, ch: ns.filter(n => n.kind === 'choice' && n.opts.length === 3).length, stat: ns.filter(n => n.kind === 'stat').every(n => n.max >= 1 && n.max <= 5) }; }));
+    chk('every class: 3 branches, 3 skills, >=15 nodes, >=3 choose-1-of-3 nodes', r.every(t => t.br === 3 && t.sk === 3 && t.nodes >= 15 && t.ch >= 3 && t.stat), r);
     const ids = await cp.evaluate(() => TDR.CLASSES.map(c => c.id));
     for (const id of ids) {
-      const r = await cp.evaluate(async (id) => {
+      r = await cp.evaluate((id) => {
         const T = window.TDR; T.newRun(id); const g = T.G, p = g.player, out = { id };
-        out.start = p.slots[0].type; out.hasSkillBtn = !!layout().skill; out.crit = g.P.crit;
-        for (let i = 0; i < 90; i++) T.update(1 / 60);              // let wave 1 spawn in & start shooting
-        // dash plain/identical: same cooldown for all classes
-        out.dashCd = g.P.dashCd;
-        const before = { bullets: g.bullets.length, hp: p.hp, dashCd: p.dashCd };
-        const used = T.useSkill(); out.used = used; out.skillT = p.skillT;
-        for (let i = 0; i < 70; i++) T.update(1 / 60);
-        T.render();
-        out.turrets = g.turrets.length; out.decoys = g.decoys.length; out.od = p.overdrive; out.haste = p.haste;
-        if (id === 'daemon') { const tu = g.turrets[0]; out.turretFx = tu ? JSON.stringify(tu.w.afx) === JSON.stringify(p.slots[p.active].afx) : false; out.turretLife = tu ? tu.max : 0; }
-        if (id === 'overclock') out.hp = p.hp;
-        if (id === 'breacher') out.stunned = 0;
-        if (id === 'glitch') { out.glitchNow = p.slots[0].name; }
-        // skill goes on cooldown and the button state reflects it; skill key via keyboard
-        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'q' }));
-        out.state = T.state; return out;
-      }, id);
-      const ok = r.hasSkillBtn && (id === 'glitch' || r.start === START[id]) && r.dashCd === 1.4 && (r.used || id === 'blackout') && r.state === 'play';
-      chk('class ' + id + ' starts with ' + r.start + ' and fires its skill', ok, r);
+        out.start = p.slots[0].type; out.rar = p.slots[0].rarity; out.second = !!p.slots[1]; out.skill = g.skill; out.lvl = g.lvl; out.pts = g.pts;
+        for (let i = 0; i < 60; i++) T.update(1 / 60);
+        out.used = T.useSkill(); out.stateAfterLocked = T.state; out.skillT = p.skillT; T.render();
+        T.gainXp(T.xpNeed(1) + 1); out.lvl2 = g.lvl; out.pts2 = g.pts; out.toast = g.lvlT > 0;
+        T.useSkill(); out.opened = T.state === 'pause' && g.pauseTab === 3; T.render(); out.cards = T.hot().filter(h => /^skill\d$/.test(h.label)).length;
+        T.setState('play'); return out; }, id);
+      chk('class ' + id + ': common pistol start, skill locked, level-up opens the 1-of-3 skill pick', r.start === 'pistol' && r.rar === 0 && !r.second && r.skill === null && r.lvl === 1 && r.pts === 0 && r.used === false && r.stateAfterLocked === 'play' && r.lvl2 === 2 && r.pts2 === 1 && r.toast && r.opened && r.cards === 3, r);
+      for (let si = 0; si < 3; si++) {
+        r = await cp.evaluate((id, si) => { const g = __run(id, si), p = g.player; g.roomState = 'combat'; for (let i = 0; i < 6; i++) g.enemies.push(__mk(p.x + 40 + i * 20, p.y - 60 - i * 10, 400)); const sk = g.skill; const used = TDR.useSkill(); for (let i = 0; i < 90; i++) TDR.update(1 / 60); TDR.render(); return { sk, used, cd: p.skillT > 0 || used, hurt: g.enemies.some(e => e.hp < e.max) || g.enemies.length < 6 || g.player.boost > 0 || g.decoys.length > 0 || g.turrets.length > 0 }; }, id, si);
+        chk(`  ${id} skill ${si + 1} (${r.sk}) casts`, r.used && r.cd, r);
+      }
     }
-    // passives
-    let r = await cp.evaluate(() => { TDR.newRun('runner'); return { crit: G.P.crit }; }); chk('runner passive: +crit', Math.abs(r.crit - 0.2) < 1e-9, r);
-    r = await cp.evaluate(() => { TDR.newRun('breacher'); const g = G; g.roomState = 'idle'; g.pillars.length = 0; g.enemies.length = 0; const p = g.player; p.slots[0].dmg = 10; g.enemies.push({ type: 'chaser', x: p.x, y: p.y - 90, vx: 0, vy: 0, r: 10, hp: 1e6, max: 1e6, speed: 0, dmg: 0, spawnT: 0, hitT: 0, atk: 9, cd: 99, burn: 0, burnDps: 0, burnTick: 0, slow: 0, state: 0, st: 0, ang: 0, dead: false, wob: 0 });
-      p.cd = 0; p.tgtT = 0; TDR.update(1 / 60); return { pierce: Math.min(...g.bullets.map(b => b.pierce)), n: g.bullets.length }; });
-    chk('breacher passive: pellets pierce one enemy', r.n > 0 && r.pierce >= 1, r);
-    r = await cp.evaluate(() => { TDR.newRun('phantom'); const g = G, p = g.player; g.roomState = 'idle'; g.pillars.length = 0; g.enemies.length = 0; p.slots[0].dmg = 20; const base = (() => { const n = g.bullets.length; return n; })(); window.dispatchEvent(new KeyboardEvent('keydown', { key: ' ' })); const armed = p.ambush; for (let i = 0; i < 20; i++) TDR.update(1 / 60);
-      g.enemies.push({ type: 'chaser', x: p.x, y: p.y - 150, vx: 0, vy: 0, r: 10, hp: 1e6, max: 1e6, speed: 0, dmg: 0, spawnT: 0, hitT: 0, atk: 9, cd: 99, burn: 0, burnDps: 0, burnTick: 0, slow: 0, state: 0, st: 0, ang: 0, dead: false, wob: 0 });
-      p.tgtT = 0; p.cd = 0; const nb = g.bullets.length; TDR.update(1 / 60); const first = g.bullets[g.bullets.length - 1]; p.cd = 0; TDR.update(1 / 60); p.cd = 0; const dmgs = g.bullets.map(b => b.dmg); return { armed, first: first && first.dmg, ratio: first ? first.dmg / Math.min(...dmgs.filter(d => d > 0)) : 0, ambushLeft: p.ambush }; });
-    chk('phantom passive: first shot after dash is x3', r.armed && r.ratio > 2.5 && !r.ambushLeft, r);
-    r = await cp.evaluate(() => { TDR.newRun('overclock'); const g = G, p = g.player; g.roomState = 'idle'; g.pillars.length = 0; g.enemies.length = 0; const mk = () => { g.bullets.length = 0; p.cd = 0; g.P.crit = 0; g.enemies.length = 0; g.enemies.push({ type: 'chaser', x: p.x, y: p.y - 100, vx: 0, vy: 0, r: 10, hp: 1e6, max: 1e6, speed: 0, dmg: 0, spawnT: 0, hitT: 0, atk: 9, cd: 99, burn: 0, burnDps: 0, burnTick: 0, slow: 0, state: 0, st: 0, ang: 0, dead: false, wob: 0 }); p.tgtT = 0; TDR.update(1 / 60); return g.bullets[0] && g.bullets[0].dmg; };
-      p.hp = 100; const hi = mk(); p.hp = 20; const lo = mk(); return { hi, lo, ratio: lo / hi }; });
-    chk('overclock passive: damage rises as HP drops', r.ratio > 1.5, r);
-    r = await cp.evaluate(() => { TDR.newRun('daemon'); const g = G, p = g.player; p.skillT = 0; TDR.useSkill(); return { life: g.turrets[0].max }; }); chk('daemon passive: turrets last longer than the 8s base', r.life > 8 * 1.5, r);
-    r = await cp.evaluate(() => { TDR.newRun('daemon'); const g = G, p = g.player; g.roomState = 'idle'; g.pillars.length = 0; g.enemies.length = 0; p.slots[0] = TDR.genWeapon('pistol', 2); p.skillT = 0; TDR.useSkill(); p.x = ARENA.x + 20; p.y = ARENA.y + ARENA.h - 20; const t = g.turrets[0]; g.enemies.push({ type: 'chaser', x: t.x, y: t.y - 90, vx: 0, vy: 0, r: 10, hp: 1e6, max: 1e6, speed: 0, dmg: 0, spawnT: 0, hitT: 0, atk: 9, cd: 99, burn: 0, burnDps: 0, burnTick: 0, slow: 0, state: 0, st: 0, ang: 0, dead: false, wob: 0 }); g.bullets.length = 0; p.skillT = 99;
-      let shots = 0; for (let i = 0; i < 90; i++) { TDR.update(1 / 60); shots += g.bullets.filter(b => b.t < 0.02 && Math.hypot(b.x - t.x, b.y - t.y) < 20).length; } return { shots, hp: g.enemies[0].hp }; });
-    chk('daemon turret fires at enemies', r.hp < 1e6, r);
-    r = await cp.evaluate(() => { TDR.newRun('breacher'); const g = G, p = g.player; g.roomState = 'idle'; g.pillars.length = 0; g.enemies.length = 0; g.enemies.push({ type: 'chaser', x: p.x, y: p.y - 40, vx: 0, vy: 0, r: 10, hp: 1e6, max: 1e6, speed: 60, dmg: 0, spawnT: 0, hitT: 0, atk: 9, cd: 99, burn: 0, burnDps: 0, burnTick: 0, slow: 0, state: 0, st: 0, ang: 0, dead: false, wob: 0 }); p.skillT = 0; const e = g.enemies[0]; const y0 = e.y; TDR.useSkill(); for (let i = 0; i < 20; i++) TDR.update(1 / 60); return { stun: e.stun, knocked: y0 - e.y > 5 || e.y < y0 }; });
+    // tree mechanics: stat node ranks + caps, tier locks, choice nodes
+    r = await cp.evaluate(() => { const g = __run('runner', 0); g.pts = 20; const c0 = g.P.crit; const st0 = TDR.nodeState(g, TDR.NODE_BY_ID.r_pl); let n = 0; for (let i = 0; i < 7; i++) if (TDR.spendNode('r_ss')) n++;
+      return { n, crit: +(g.P.crit - c0).toFixed(3), lockedBefore: st0, unlocked: TDR.nodeState(g, TDR.NODE_BY_ID.r_pl), cap: TDR.nodeState(g, TDR.NODE_BY_ID.r_sig), pts: g.pts }; });
+    chk('stat node: 5 ranks max, +3% crit each; tier 2 unlocks after 3 branch points', r.n === 5 && r.crit === 0.15 && r.lockedBefore === 'locked' && r.unlocked === 'open' && r.cap === 'locked' && r.pts === 15, r);
+    r = await cp.evaluate(() => { const g = __run('runner', 0); g.pts = 20; ['r_cap', 'r_cap', 'r_cap'].forEach(id => TDR.spendNode(id)); const ok = TDR.spendNode('r_aug', 2); const again = TDR.spendNode('r_aug', 0); return { ok, again, choice: g.choice.r_aug, shield: g.P.augShield, nova: g.P.augNova }; });
+    chk('choose-1-of-3 skill augment is permanent and applies only the picked option', r.ok && !r.again && r.choice === 2 && r.shield === 1 && !r.nova, r);
+    r = await cp.evaluate(() => { const g = __run('runner', 0), p = g.player; g.pts = 20; ['r_cap', 'r_cap', 'r_cap'].forEach(id => TDR.spendNode(id)); TDR.spendNode('r_aug', 2); p.skillT = 0; TDR.useSkill(); return { shield: g.shield || p.shield || 0 }; });
+    chk('Hardlight Shield augment grants a shield on cast', r.shield > 0, r);
+    // a few signature skills still do their thing
+    r = await cp.evaluate(() => { const g = __run('breacher', 0), p = g.player; g.enemies.push(__mk(p.x, p.y - 40)); g.enemies[0].speed = 60; const e = g.enemies[0]; const y0 = e.y; TDR.useSkill(); for (let i = 0; i < 20; i++) TDR.update(1 / 60); return { stun: e.stun, knocked: y0 - e.y > 5 }; });
     chk('breacher shockwave stuns + knocks back', r.stun > 0.5 && r.knocked, r);
-    r = await cp.evaluate(() => { TDR.newRun('phantom'); const g = G, p = g.player; g.roomState = 'idle'; g.pillars.length = 0; g.enemies.length = 0; g.enemies.push({ type: 'chaser', x: p.x + 60, y: p.y, vx: 0, vy: 0, r: 10, hp: 1e6, max: 1e6, speed: 60, dmg: 0, spawnT: 0, hitT: 0, atk: 9, cd: 99, burn: 0, burnDps: 0, burnTick: 0, slow: 0, state: 0, st: 0, ang: 0, dead: false, wob: 0 }); p.skillT = 0; TDR.useSkill(); const d = g.decoys[0]; p.x -= 120; const e = g.enemies[0]; const d0 = Math.hypot(e.x - d.x, e.y - d.y); for (let i = 0; i < 40; i++) TDR.update(1 / 60); return { toward: Math.hypot(e.x - d.x, e.y - d.y) < d0 - 15, decoy: g.decoys.length }; });
+    r = await cp.evaluate(() => { const g = __run('phantom', 0), p = g.player; g.enemies.push(__mk(p.x + 60, p.y)); g.enemies[0].speed = 60; TDR.useSkill(); const d = g.decoys[0]; p.x -= 120; const e = g.enemies[0]; const d0 = Math.hypot(e.x - d.x, e.y - d.y); for (let i = 0; i < 40; i++) TDR.update(1 / 60); return { toward: Math.hypot(e.x - d.x, e.y - d.y) < d0 - 15 }; });
     chk('phantom decoy attracts enemies', r.toward, r);
-    r = await cp.evaluate(() => { TDR.newRun('overclock'); const g = G, p = g.player; p.hp = 100; p.skillT = 0; TDR.useSkill(); return { hp: p.hp, od: p.overdrive }; }); chk('overclock redline: costs HP, boosts fire rate', r.hp === 85 && r.od > 4, r);
-    r = await cp.evaluate(() => { TDR.newRun('blackout'); const g = G, p = g.player; g.roomState = 'idle'; g.pillars.length = 0; g.enemies.length = 0; const mk = (x, y) => ({ type: 'chaser', x, y, vx: 0, vy: 0, r: 10, hp: 200, max: 200, speed: 0, dmg: 0, spawnT: 0, hitT: 0, atk: 9, cd: 99, burn: 0, burnDps: 0, burnTick: 0, slow: 0, state: 0, st: 0, ang: 0, dead: false, wob: 0 });
-      const cx = ARENA.x + ARENA.w / 2, cy = ARENA.y + 120; for (let i = 0; i < 5; i++) g.enemies.push(mk(cx + i * 6 - 12, cy + (i % 2) * 8)); const far = mk(ARENA.x + 30, ARENA.y + ARENA.h - 60); g.enemies.push(far); p.skillT = 0; TDR.useSkill(); for (let i = 0; i < 80; i++) TDR.update(1 / 60);
-      return { clusterHp: g.enemies.filter(e => e.y < cy + 30).map(e => Math.round(e.hp)), farHp: far.hp }; });
+    r = await cp.evaluate(() => { const g = __run('overclock', 0), p = g.player; p.hp = 100; TDR.useSkill(); return { hp: p.hp, od: p.overdrive }; }); chk('overclock redline: costs HP, boosts fire rate', r.hp === 85 && r.od > 4, r);
+    r = await cp.evaluate(() => { const g = __run('daemon', 0), p = g.player; p.slots[0] = TDR.genWeapon('pistol', 2); TDR.useSkill(); const t = g.turrets[0]; g.enemies.push(__mk(t.x, t.y - 90)); p.skillT = 99; for (let i = 0; i < 90; i++) TDR.update(1 / 60); return { hp: g.enemies[0].hp, fx: JSON.stringify(t.w.afx) === JSON.stringify(p.slots[0].afx) }; });
+    chk('daemon turret copies weapon affixes and fires', r.hp < 1e6 && r.fx, r);
+    r = await cp.evaluate(() => { const g = __run('blackout', 0), p = g.player; const cx = p.x, cy = p.y - 160; for (let i = 0; i < 5; i++) g.enemies.push(__mk(cx + i * 6 - 12, cy + (i % 2) * 8, 200)); const far = __mk(p.x + 300, p.y + 250, 200); g.enemies.push(far); TDR.useSkill(); for (let i = 0; i < 80; i++) TDR.update(1 / 60);
+      return { clusterHp: g.enemies.filter(e => e !== far).map(e => Math.round(e.hp)), farHp: far.hp }; });
     chk('blackout orbital strike hits the densest cluster, not the loner', r.clusterHp.every(h => h < 200) && r.farHp === 200, r);
-    r = await cp.evaluate(() => { TDR.newRun('glitch'); const g = G, p = g.player; p.slots[0] = TDR.genWeapon('pistol', 3); const w = p.slots[0]; let changed = false; for (let k = 0; k < 6 && !changed; k++) { const before = w.afx.join(); p.skillT = 0; TDR.useSkill(); changed = w.afx.join() !== before; }
-      const okName = w.name === (w.afx.map(a => AFFIX_BY_ID[a].adj).concat('Pistol')).join(' ');
-      g.roomState = 'clear'; TDR.setState('play'); g.doorOpen = false; g.perkDone = false; g.clearT = -1; for (let i = 0; i < 3; i++) TDR.update(1 / 60);
-      return { changed, okName, perks: g.perkOffer && g.perkOffer.length, state: TDR.state }; });
-    chk('glitch: skill rerolls affixes; 4 perk choices', r.changed && r.okName && r.perks === 4, r);
-    r = await cp.evaluate(() => { TDR.newRun('glitch'); const g = G, p = g.player; g.roomState = 'idle'; let hits = 0; for (let k = 0; k < 40; k++) { const w = TDR.genWeapon('smg', 3), before = w.afx.join(); g.items.length = 0; g.items.push({ kind: 'weapon', w, x: p.x, y: p.y, t: 1, vx: 0, vy: 0 }); TDR.update(1 / 60); TDR.pickup(1); if (w.afx.join() !== before) hits++; p.slots[1] = null; }
-      return { hits }; });
-    chk('glitch: pickups sometimes reroll an affix', r.hits > 5 && r.hits < 40, r);
-    // normal classes get 3 perk choices
-    r = await cp.evaluate(() => { TDR.newRun('runner'); const g = G; g.roomState = 'clear'; g.clearT = -1; g.perkDone = false; for (let i = 0; i < 3; i++) TDR.update(1 / 60); return { perks: g.perkOffer && g.perkOffer.length }; }); chk('other classes: 3 perk choices', r.perks === 3, r);
+    r = await cp.evaluate(() => { const g = __run('glitch', 0), p = g.player; p.slots[0] = TDR.genWeapon('pistol', 3); const w = p.slots[0]; let changed = false; for (let k = 0; k < 6 && !changed; k++) { const before = w.afx.join(); p.skillT = 0; TDR.useSkill(); changed = w.afx.join() !== before; } return { changed, okName: w.name === (w.afx.map(a => AFFIX_BY_ID[a].adj).concat('Pistol')).join(' ') }; });
+    chk('glitch reroll skill rerolls affixes', r.changed && r.okName, r);
+    r = await cp.evaluate(() => { const g = __run('glitch', 0), p = g.player; g.pts = 20; for (let i = 0; i < 5; i++) TDR.spendNode('g_bf'); let hits = 0; for (let k = 0; k < 40; k++) { const w = TDR.genWeapon('smg', 3), before = w.afx.join(); g.items.length = 0; g.items.push({ kind: 'weapon', w, x: p.x, y: p.y, t: 1, vx: 0, vy: 0 }); TDR.update(1 / 60); TDR.pickup(1); if (w.afx.join() !== before) hits++; p.slots[1] = null; } return { hits }; });
+    chk('glitch Bit Flip: pickups sometimes reroll an affix', r.hits > 5 && r.hits < 40, r);
+    r = await cp.evaluate(() => { TDR.newRun('runner'); const g = G; g.roomState = 'clear'; g.clearT = -1; g.perkDone = false; for (let i = 0; i < 3; i++) TDR.update(1 / 60); return { perks: g.perkOffer && g.perkOffer.length }; }); chk('random perks still offered (3 choices)', r.perks === 3, r);
+    // kills grant XP; room clears grant XP
+    r = await cp.evaluate(() => { const g = __run('runner'), p = g.player; g.roomState = 'combat'; const e = __mk(p.x, p.y - 50, 5); g.enemies.push(e); const x0 = g.xp; TDR.killEnemy(e); return { gained: g.xp - x0 }; });
+    chk('kills give XP', r.gained > 0, r);
     // persistence: last class remembered across reloads; Glitch selection shown on select screen
     await cp.evaluate(() => TDR.newRun('daemon')); await cp.reload({ waitUntil: 'load' }); await sleep(300);
     r = await cp.evaluate(() => ({ idx: TDR.sel.idx, id: TDR.CLASSES[TDR.sel.idx].id })); chk('last chosen class remembered', r.id === 'daemon', r);
@@ -283,13 +279,13 @@ try {
       const g2 = await cp.evaluate(() => { const hh = TDR.hot(), inside = hh.every(r => r.x >= 0 && r.x + r.w <= LW + 1 && r.y >= 0 && r.y + r.h <= LH + 1); return { n: hh.length, inside, start: hh.some(r => /^START AS/.test(r.label)) }; });
       chk('class select ' + (tag === 'p' ? 'portrait' : 'landscape') + ': buttons on screen', g2.inside && g2.start, g2);
       // in-run: skill button in right thumb zone, inside screen, clear of the arena, in both orientations
-      const g3 = await cp.evaluate(() => { TDR.newRun('runner'); for (let i = 0; i < 20; i++) TDR.update(1 / 60); const L = layout(), A = ARENA, s = L.skill; const ov = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+      const g3 = await cp.evaluate(() => { TDR.newRun('runner'); for (let i = 0; i < 20; i++) TDR.update(1 / 60); const L = layout(), A = VIEW, s = L.skill; const ov = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
         const dist2 = Math.hypot(s.x - L.dash.x, s.y - L.dash.y) > s.r + L.dash.r - 4;
         const sr = { x: s.x - s.r, y: s.y - s.r, w: s.r * 2, h: s.r * 2 };
         return { right: s.x > LW / 2, inside: sr.x >= 0 && sr.y >= 0 && sr.x + sr.w <= LW && sr.y + sr.h <= LH, noOverlapDash: dist2, arenaClear: !ov(sr, A) || !land === true }; });
       chk('skill button in thumb zone (' + tag + ')', g3.right && g3.inside && g3.noOverlapDash, g3);
       // tap the skill button with a real touch
-      const sp = await cp.evaluate(() => { G.player.skillT = 0; const s = layout().skill; return { x: offX + s.x * scale, y: offY + s.y * scale }; });
+      const sp = await cp.evaluate(() => { TDR.gainXp(TDR.xpNeed(G.lvl)); TDR.spendNode('skill', 0); TDR.setState('play'); G.player.skillT = 0; const s = layout().skill; return { x: offX + s.x * scale, y: offY + s.y * scale }; });
       await cp.touchscreen.tap(sp.x, sp.y); await sleep(150);
       chk('touch on skill button triggers skill (' + tag + ')', await cp.evaluate(() => G.player.skillT > 0));
       await cp.screenshot({ path: OUT + `/12-play-${tag}.png` });
@@ -428,7 +424,7 @@ try {
 
     // ----- perks: pool, tiers, synergy filters, reroll / banish / skip, stacking
     r = await gp.evaluate(() => { TDR.newRun('runner'); const P = TDR.PERKS; const tiers = { common: 0, rare: 0, epic: 0 }; P.forEach(p => tiers[p.tier]++); const g = G; const out = { n: P.length, tiers, stack: P.some(p => p.max > 1), classPerks: P.filter(p => p.cls).length, affixPerks: P.filter(p => p.aff).length };
-      let leakCls = 0, leakAff = 0, burnSeen = 0, clsSeen = 0; for (let i = 0; i < 400; i++) { const o = TDR.pickPerks(3, [], 0); if (o.length !== 3 || new Set(o.map(p => p.id)).size !== 3) out.badOffer = true; o.forEach(p => { if (p.cls && p.cls !== 'runner') leakCls++; if (p.aff) leakAff++; if (p.cls === 'runner') clsSeen++; }); }
+      let leakCls = 0, leakAff = 0, burnSeen = 0, clsSeen = 0; G.skill = 'overload'; for (let i = 0; i < 400; i++) { const o = TDR.pickPerks(3, [], 0); if (o.length !== 3 || new Set(o.map(p => p.id)).size !== 3) out.badOffer = true; o.forEach(p => { if (p.cls && p.cls !== 'runner') leakCls++; if (p.aff) leakAff++; if (p.cls === 'runner') clsSeen++; }); }
       out.leakCls = leakCls; out.leakAff = leakAff; out.clsSeen = clsSeen; const w = TDR.genWeapon('pistol', 3); w.fx.burning = true; g.player.slots[1] = w; for (let i = 0; i < 400; i++) TDR.pickPerks(3, [], 0).forEach(p => { if (p.aff === 'burning') burnSeen++; }); out.burnSeen = burnSeen;
       let comm = 0; for (let i = 0; i < 200; i++) TDR.pickPerks(3, [], 1).forEach(p => { if (p.tier === 'common') comm++; }); out.commonInRare = comm; return out; });
     chk('perk pool: 30+ perks with common/rare/epic tiers, stackable, class + affix synergies', r.n >= 30 && r.tiers.common >= 8 && r.tiers.rare >= 8 && r.tiers.epic >= 3 && r.stack && r.classPerks >= 7 && r.affixPerks >= 8, r);
@@ -436,10 +432,10 @@ try {
     r = await gp.evaluate(() => { TDR.newRun('runner'); const g = G; g.credits = 0; TDR.offerPerks({}); const before = g.perkOffer.map(p => p.id); const rr0 = g.rerolls; const ok1 = TDR.rerollOffer(); const after = g.perkOffer.map(p => p.id); const out = { used: rr0 - g.rerolls, changed: after.every(id => before.indexOf(id) < 0), n: after.length, st: TDR.state };
       g.rerolls = 0; out.noMore = TDR.rerollOffer() === false; const bid = g.perkOffer[0].id, b0 = g.banishes; out.banished = TDR.banishCard(0); out.bUsed = b0 - g.banishes; out.replaced = g.perkOffer[0].id !== bid && g.perkOffer.length === 3; let seen = 0; for (let i = 0; i < 300; i++) TDR.pickPerks(3, [], 0).forEach(p => { if (p.id === bid) seen++; }); out.neverAgain = seen === 0; g.banishes = 0; out.noMoreBan = TDR.banishCard(1) === false;
       const d0 = g.doorOpen; TDR.skipOffer(); out.skip = { credits: g.credits, st: TDR.state, door: g.doorOpen }; TDR.offerPerks({}); const dm = TDR.PERKS.find(p => p.id === 'dmg'); TDR.takePerk(dm); TDR.offerPerks({}); TDR.takePerk(dm); out.stack = g.perkCount.dmg === 2 && Math.abs(g.P.dmg - 0.2) < 1e-9;
-      const glass = TDR.PERKS.find(p => p.id === 'glass'); TDR.offerPerks({}); TDR.takePerk(glass); out.once = !TDR.perkEligible(0).some(p => p.id === 'glass'); TDR.newRun('glitch'); TDR.offerPerks({}); out.glitch4 = G.perkOffer.length; return out; });
+      const glass = TDR.PERKS.find(p => p.id === 'glass'); TDR.offerPerks({}); TDR.takePerk(glass); out.once = !TDR.perkEligible(0).some(p => p.id === 'glass'); TDR.newRun('glitch'); G.pts = 9; TDR.spendNode('skill', 0); ['g_ft', 'g_ft', 'g_ft'].forEach(n => TDR.spendNode(n)); TDR.spendNode('g_ex', 0); TDR.offerPerks({}); out.glitch4 = G.perkOffer.length; return out; });
     chk('perk reroll: limited tokens, whole offer changes', r.used === 1 && r.changed && r.n === 3 && r.noMore, r);
     chk('perk banish: limited, replaces card, never offered again', r.banished && r.bUsed === 1 && r.replaced && r.neverAgain && r.noMoreBan, r);
-    chk('perk skip gives credits + opens door; stacking works; max stacks respected; Glitch keeps 4 choices', r.skip.credits === 40 && r.skip.st === 'play' && r.skip.door && r.stack && r.once && r.glitch4 === 4, r);
+    chk('perk skip gives credits + opens door; stacking works; max stacks respected; Glitch House Edge gives 4 choices', r.skip.credits === 40 && r.skip.st === 'play' && r.skip.door && r.stack && r.once && r.glitch4 === 4, r);
     // perk screen UI by touch (portrait)
     r = await gp.evaluate(() => { TDR.newRun('runner'); TDR.offerPerks({}); TDR.render(); return { hot: TDR.hot().map(h => ({ l: h.label, ok: h.x >= 0 && h.y >= 0 && h.x + h.w <= LW && h.y + h.h <= LH, h: h.h })), ids: G.perkOffer.map(p => p.id), rr: G.rerolls }; });
     chk('perk UI: 3 cards + REROLL / BANISH / SKIP buttons on screen', r.hot.filter(h => /^perk\d$/.test(h.l)).length === 3 && r.hot.some(h => /^REROLL/.test(h.l)) && r.hot.some(h => /^BANISH/.test(h.l)) && r.hot.some(h => /^SKIP/.test(h.l)) && r.hot.every(h => h.ok), r.hot);
@@ -487,7 +483,7 @@ try {
     // ----- landscape: same UI flows (perk screen, shop, risk, pause weapons, victory + loop)
     const lg = await mk(844, 390, true), lgS = await lg.evaluate(() => ({ land })); chk('landscape page', lgS.land);
     await pauseSuite(lg, 'landscape');
-    r = await lg.evaluate(() => { TDR.newRun('glitch'); TDR.offerPerks({}); TDR.render(); return TDR.hot().map(h => ({ l: h.label, ok: h.x >= 0 && h.y >= 0 && h.x + h.w <= LW && h.y + h.h <= LH })); });
+    r = await lg.evaluate(() => { TDR.newRun('glitch'); G.P.extraPerk = 1; TDR.offerPerks({}); TDR.render(); return TDR.hot().map(h => ({ l: h.label, ok: h.x >= 0 && h.y >= 0 && h.x + h.w <= LW && h.y + h.h <= LH })); });
     chk('landscape perk UI: 4 cards (Glitch) + 3 buttons on screen', r.filter(h => /^perk\d$/.test(h.l)).length === 4 && r.some(h => /^REROLL/.test(h.l)) && r.every(h => h.ok), r);
     await tapHot(lg, /^SKIP/); chk('landscape: SKIP works', (await lg.evaluate(() => TDR.state)) === 'play');
     await lg.evaluate(() => { TDR.newRun('runner'); G.credits = 400; TDR.startRoom(2, 'shop'); G.player.x = G.shop.x; G.player.y = G.shop.y; TDR.update(1 / 60); TDR.render(); });
@@ -526,6 +522,68 @@ try {
     chk('dying in a loop records best loop + wins from earlier clears', r.bestLoop === 4 && r.wins === 3 && r.bestTime === 280, r);
     chk('no console errors (landscape)', lg.errs.length === 0, lg.errs);
     await lg.close();
+  }
+
+  // ---------- bigger rooms, follow camera, indicators, minimap, XP / upgrade prompt, Tree tab, loop keeps tree
+  for (const [vw, vh, tag] of [[390, 844, 'p'], [844, 390, 'l']]) {
+    const bp = await browser.newPage(); const e6 = []; const chk = (name, ok, extra) => { console.log((ok ? 'ok   ' : 'FAIL ') + name + ' (' + tag + ')', ok ? '' : JSON.stringify(extra || '')); if (!ok) fail++; };
+    bp.on('pageerror', e => e6.push(e.message)); bp.on('console', m => { if (m.type() === 'error') e6.push(m.text()); });
+    await bp.setViewport({ width: vw, height: vh, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+    await bp.goto(APP + '?god=1', { waitUntil: 'load' }); await sleep(300);
+    let r = await bp.evaluate(() => { TDR.newRun('runner'); for (let i = 0; i < 40; i++) TDR.update(1 / 60); return { area: (ARENA.w * ARENA.h) / (VIEW.w * VIEW.h), A: { ...ARENA }, V: { ...VIEW } }; });
+    chk('combat room is ~2-3x the visible area', r.area >= 1.9 && r.area <= 3.4, r);
+    r = await bp.evaluate(() => { const g = G, p = g.player; g.enemies.length = 0; g.roomState = 'idle'; const res = {};
+      p.x = ARENA.x + 30; p.y = ARENA.y + 30; for (let i = 0; i < 120; i++) { TDR.update(1 / 60); TDR.updateCamera(1 / 60); } res.tl = { x: cam.x, y: cam.y }; const s1 = TDR.toScreen(p.x, p.y);
+      p.x = ARENA.x + ARENA.w - 30; p.y = ARENA.y + ARENA.h - 30; TDR.updateCamera(1 / 60); const mid = { x: cam.x, y: cam.y }; for (let i = 0; i < 180; i++) { TDR.update(1 / 60); TDR.updateCamera(1 / 60); } res.br = { x: cam.x, y: cam.y }; const s2 = TDR.toScreen(p.x, p.y);
+      res.smooth = mid.x < res.br.x - 30 || mid.y < res.br.y - 30; res.clampTL = res.tl.x >= ARENA.x - 27 && res.tl.y >= ARENA.y - 27; res.clampBR = res.br.x <= ARENA.x + ARENA.w + 27 - VIEW.w + 0.5 && res.br.y <= ARENA.y + ARENA.h + 27 - VIEW.h + 0.5; res.moved = res.br.x - res.tl.x > 100 || res.br.y - res.tl.y > 100;
+      res.visible = [s1, s2].every(s => s.x > VIEW.x && s.x < VIEW.x + VIEW.w && s.y > VIEW.y && s.y < VIEW.y + VIEW.h);
+      p.x = ARENA.x + ARENA.w / 2; p.y = ARENA.y + ARENA.h / 2; for (let i = 0; i < 120; i++) TDR.updateCamera(1 / 60); const c0 = { ...cam }; window.dispatchEvent(new KeyboardEvent('keydown', { key: 'd' })); for (let i = 0; i < 30; i++) { TDR.update(1 / 60); TDR.updateCamera(1 / 60); } window.dispatchEvent(new KeyboardEvent('keyup', { key: 'd' }));
+      g.mvx = 1; g.mvy = 0; const tR = camTarget(); g.mvx = 0; const t0 = camTarget(); g.mvx = -1; const tL = camTarget(); g.mvx = 0; g.mvy = 1; const tD = camTarget(); g.mvy = 0; res.lead = tR.x - t0.x > 20 && t0.x - tL.x > 20 && tD.y - t0.y > 20; return res; });
+    chk('camera follows the player smoothly, clamped to the room, leads the move direction', r.smooth && r.clampTL && r.clampBR && r.moved && r.visible && r.lead, r);
+    r = await bp.evaluate(() => { const g = G, p = g.player; p.x = ARENA.x + 60; p.y = ARENA.y + 60; for (let i = 0; i < 120; i++) TDR.updateCamera(1 / 60); g.roomState = 'combat';
+      g.enemies.push({ type: 'chaser', x: ARENA.x + ARENA.w - 40, y: ARENA.y + ARENA.h - 40, vx: 0, vy: 0, r: 10, hp: 1e6, max: 1e6, speed: 0, dmg: 0, spawnT: 0, hitT: 0, atk: 9, cd: 99, burn: 0, burnDps: 0, burnTick: 0, slow: 0, state: 0, st: 0, ang: 0, dead: false, wob: 0 });
+      g.items.push({ kind: 'weapon', w: TDR.genWeapon('smg', 3), x: ARENA.x + ARENA.w - 40, y: ARENA.y + 50, t: 1, vx: 0, vy: 0 });
+      const calls = { ind: 0, mm: 0 }; const oi = window.drawIndicators, om = window.drawMinimap; window.drawIndicators = function () { calls.ind++; return oi.apply(this, arguments); }; window.drawMinimap = function () { calls.mm++; return om.apply(this, arguments); };
+      let arcs = 0; const ofill = CanvasRenderingContext2D.prototype.fill; CanvasRenderingContext2D.prototype.fill = function () { arcs++; return ofill.apply(this, arguments); };
+      TDR.render(); CanvasRenderingContext2D.prototype.fill = ofill; window.drawIndicators = oi; window.drawMinimap = om;
+      return { calls, offEnemy: !TDR.toScreen ? null : (() => { const e = g.enemies[0], s = TDR.toScreen(e.x, e.y); return s.x > VIEW.x + VIEW.w || s.y > VIEW.y + VIEW.h; })() }; });
+    chk('off-screen enemy/loot indicators + minimap drawn', r.calls.ind > 0 && r.calls.mm > 0 && r.offEnemy, r);
+    await bp.screenshot({ path: OUT + `/13-camera-${tag}.png` });
+    // locked skill button, XP, level-up toast, upgrade prompt tap -> Tree tab
+    r = await bp.evaluate(() => { const g = G; g.enemies.length = 0; g.roomState = 'idle'; TDR.render(); const lockLbl = TDR.hot().some(h => /skill/i.test(h.label || '')); const used = TDR.useSkill(); TDR.gainXp(TDR.xpNeed(1)); TDR.render(); return { used, lvl: g.lvl, pts: g.pts, toast: g.lvlT > 0, state: TDR.state }; });
+    chk('skill locked at start; XP -> level 2 + toast', r.used === false && r.lvl === 2 && r.pts === 1 && r.toast && r.state === 'play', r);
+    await bp.screenshot({ path: OUT + `/14-levelup-${tag}.png` });
+    const ub = await bp.evaluate(() => { const r = upgradeBtnRect(layout()); return { x: offX + (r.x + r.w / 2) * scale, y: offY + (r.y + r.h / 2) * scale, r, inside: r.x >= 0 && r.y >= 0 && r.x + r.w <= LW && r.y + r.h <= LH }; });
+    await bp.touchscreen.tap(ub.x, ub.y); await sleep(250);
+    r = await bp.evaluate(() => ({ state: TDR.state, tab: G.pauseTab, cards: TDR.hot().filter(h => /^skill\d$/.test(h.label)).length }));
+    chk('UPGRADE prompt (touch) opens the Tree tab with 3 skill cards', ub.inside && r.state === 'pause' && r.tab === 3 && r.cards === 3, { ub, r });
+    await bp.screenshot({ path: OUT + `/15-skillpick-${tag}.png` });
+    const tapLbl = async re => { for (let k = 0; k < 10; k++) {   // scroll the list with a real touch drag until the target is visible
+        const q = await bp.evaluate(src => { TDR.render(); const h = TDR.hot().find(h => new RegExp(src).test(h.label || '')); const ok = h && h.y + h.h / 2 > LH * 0.18 && h.y + h.h / 2 < LH - 20; return { hit: ok ? { x: offX + (h.x + h.w / 2) * scale, y: offY + (h.y + h.h / 2) * scale } : null, mid: { x: offX + LW / 2 * scale, y: offY + LH * 0.62 * scale }, d: h && h.y + h.h / 2 < LH * 0.18 ? 1 : -1 }; }, re.source);
+        if (q.hit) { await bp.touchscreen.tap(q.hit.x, q.hit.y); await sleep(200); return true; }
+        const t = await bp.touchscreen.touchStart(q.mid.x, q.mid.y); await t.move(q.mid.x, q.mid.y + 40 * q.d); await t.move(q.mid.x, q.mid.y + 90 * q.d); await t.end(); await sleep(120); } return false; };
+    const t1 = await tapLbl(/^skill2$/);
+    r = await bp.evaluate(() => ({ skill: G.skill, want: TDR.TREES.runner.skills[2], pts: G.pts }));
+    chk('tap a skill card picks that skill', t1 && r.skill === r.want && r.pts === 0, r);
+    await bp.evaluate(() => { for (let i = 0; i < 4; i++) TDR.gainXp(TDR.xpNeed(G.lvl)); });
+    // branch pill -> skill branch (Overload), node row tap selects, SPEND POINT spends; locked tier shows as locked
+    const tb = await tapLbl(/^branch2$/), tn = await tapLbl(/^node:r_cap$/), ts = await tapLbl(/^SPEND POINT/);
+    r = await bp.evaluate(() => { TDR.render(); const hs = TDR.hot(); return { rank: G.tree.r_cap || 0, pts: G.pts, br: G.treeBr, rows: hs.filter(h => /^node:/.test(h.label)).length, augLocked: TDR.nodeState(G, TDR.NODE_BY_ID.r_aug), inside: hs.every(h => h.x >= -1 && h.x + h.w <= LW + 1) }; });
+    chk('Tree tab: branch pills, node rows, SPEND POINT; tier lock shown', tb && tn && ts && r.rank === 1 && r.pts === 3 && r.br === 2 && r.rows >= 3 && r.augLocked === 'locked' && r.inside, { tb, tn, ts, r });
+    await tapLbl(/^SPEND POINT/); await tapLbl(/^SPEND POINT/);
+    const ta = await tapLbl(/^node:r_aug$/); await bp.screenshot({ path: OUT + `/16-tree-aug-${tag}.png` });
+    const to = await tapLbl(/^opt:r_aug:1$/);
+    r = await bp.evaluate(() => ({ choice: G.choice.r_aug, haste: G.P.augHaste, pts: G.pts, state: TDR.nodeState(G, TDR.NODE_BY_ID.r_aug) }));
+    chk('Tree tab: 1-of-3 augment options shown and picked by touch', ta && to && r.choice === 1 && r.haste === 1 && r.pts === 0 && r.state === 'max', { ta, to, r });
+    await bp.screenshot({ path: OUT + `/17-tree-${tag}.png` });
+    // pause menu has 4 tabs incl. TREE
+    r = await bp.evaluate(() => { G.pauseTab = 0; TDR.render(); return TDR.hot().filter(h => /^(MENU|WEAPONS|PERKS|TREE)/.test(h.label || '')).map(h => h.label); });
+    chk('pause menu has MENU / WEAPONS / PERKS / TREE tabs', r.length === 4 && /^TREE/.test(r[3]), r);
+    // loop mode keeps level + tree
+    r = await bp.evaluate(() => { const g = G; const before = { lvl: g.lvl, skill: g.skill, cap: g.tree.r_cap, aug: g.choice.r_aug }; TDR.setState('win'); TDR.startLoop(); return { before, after: { lvl: G.lvl, skill: G.skill, cap: G.tree.r_cap, aug: G.choice.r_aug, loop: G.loop, P: G.P.augHaste } }; });
+    chk('loop keeps level, skill and tree', JSON.stringify(r.before) === JSON.stringify({ lvl: r.after.lvl, skill: r.after.skill, cap: r.after.cap, aug: r.after.aug }) && r.after.loop === 2 && r.after.P === 1, r);
+    chk('no console errors (camera/tree)', e6.length === 0, e6);
+    await bp.close();
   }
 
   // death path (no god)

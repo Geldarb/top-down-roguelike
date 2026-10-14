@@ -6,7 +6,7 @@ const EDGE = 14;
 function contentX() { return { l: SA.l + EDGE, r: LW - SA.r - EDGE, cx: SA.l + (LW - SA.l - SA.r) / 2, w: LW - SA.l - SA.r - EDGE * 2 }; }
 function pill(x, y, w, h, text, col, size, filled) {
   rr(x, y, w, h, h / 2); ctx.fillStyle = filled ? hexA(col, 0.85) : hexA(col, 0.16); ctx.fill(); ctx.lineWidth = 1.2; ctx.strokeStyle = col; ctx.stroke();
-  fitTxt(text, x + w / 2, y + h / 2 + 0.5, w - 6, size || 10, filled ? '#05060f' : col, 'center', '800');
+  fitTxt(text, x + w / 2, y + h / 2 + 0.5, w - 6, size || 10, filled ? '#05060f' : col, 'center', '800', !filled);
 }
 function btn(x, y, w, h, label, fn, color, size, enabled) {
   if (enabled === false) { rr(x, y, w, h, 10); ctx.fillStyle = 'rgba(30,34,50,0.7)'; ctx.fill(); ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(120,130,160,0.5)'; ctx.stroke(); fitTxt(label, x + w / 2, y + h / 2 + 1, w - 8, size || 14, '#6d7690', 'center', '800'); hot.push({ x, y: y + hotOff, w, h, fn: () => {}, label: label + ' (off)' }); return; }
@@ -218,8 +218,8 @@ function drawPerksTab(x, y, W, H) {
 function pauseInfo(x, y, W, H) {
   const g = G, p = g.player, C = g.C, cur = g.cur, zi = ZONES[g.zone];
   rr(x, y, W, H, 12); ctx.fillStyle = 'rgba(6,9,22,0.8)'; ctx.fill(); nstroke(C.color, 1, 0.5);
-  fitTxt(C.name.toUpperCase() + ' · ' + C.skill, x + W / 2, y + 17, W - 16, 13, C.color, 'center', '800');
-  const rows = [['Zone', 'Z' + g.zone + ' ' + zi.name], ['Room', roomLabel(cur)], ['Loop', 'Loop ' + g.loop], ['Credits', '¢ ' + g.credits], ['Time / kills', fmt(g.time) + ' / ' + g.kills], ['Rerolls / banishes', g.rerolls + ' / ' + g.banishes]];
+  fitTxt(C.name.toUpperCase() + ' · LV ' + g.lvl + ' · ' + (skillDef(g) ? skillDef(g).name : 'skill locked'), x + W / 2, y + 17, W - 16, 13, C.color, 'center', '800');
+  const rows = [['Zone', 'Z' + g.zone + ' ' + zi.name], ['Room', roomLabel(cur)], ['Loop', 'Loop ' + g.loop], ['Credits', '¢ ' + g.credits], ['Time / kills', fmt(g.time) + ' / ' + g.kills], ['Rerolls / banishes', g.rerolls + ' / ' + g.banishes], ['Level / points', 'LV ' + g.lvl + ' / ' + g.pts + ' unspent']];
   const rh = Math.min(20, (H - 36) / rows.length);
   rows.forEach((r, i) => { txt(r[0], x + 14, y + 36 + i * rh, 11.5, '#8f98ad', 'left', '600', false); fitTxt(r[1], x + W - 14, y + 36 + i * rh, W * 0.58, 12, '#fff', 'right', '800'); });
 }
@@ -227,7 +227,7 @@ function drawPause() {
   overlay(0.8);
   const g = G, X = contentX(); g.wcState = [];
   const tab = g.pauseTab;
-  const tabs = (x, y, w, h) => { const gap = 6, bw = (w - gap * 2) / 3; ['MENU', 'WEAPONS', 'PERKS'].forEach((nm, i) => button(x + i * (bw + gap), y, bw, h, nm, () => { g.pauseTab = i; g.scrollY = 0; }, g.pauseTab === i ? '#19f0ff' : '#4a5788', 13)); };
+  const tabs = (x, y, w, h) => { const gap = 6, bw = (w - gap * 3) / 4; ['MENU', 'WEAPONS', 'PERKS', 'TREE' + (g.pts > 0 ? ' (' + g.pts + ')' : '')].forEach((nm, i) => button(x + i * (bw + gap), y, bw, h, nm, () => { g.pauseTab = i; g.scrollY = 0; }, g.pauseTab === i ? '#19f0ff' : i === 3 && g.pts > 0 ? '#ffe066' : '#4a5788', 12.5)); };
   if (land) {
     txt('PAUSED', X.l, SA.t + 22, 24, '#fff', 'left', '900');
     button(X.r - 120, SA.t + 6, 120, 32, 'RESUME', () => { state = 'play'; }, '#19f0ff', 15);
@@ -239,7 +239,8 @@ function drawPause() {
       button(X.l, cy + 54, bw, 44, 'QUIT TO MENU', () => quitToMenu(), '#ff3b6b', 15);
       pauseInfo(X.l + bw + 16, cy, X.w - bw - 16, Math.min(ch, 150));
     } else if (tab === 1) drawWeaponsTab(X.l, cy, X.w, ch);
-    else drawPerksTab(X.l, cy, X.w, ch);
+    else if (tab === 2) drawPerksTab(X.l, cy, X.w, ch);
+    else drawTreeTab(X.l, cy, X.w, ch);
     return;
   }
   txt('PAUSED', LW / 2, SA.t + 30, 28, '#fff', 'center', '900');
@@ -251,7 +252,8 @@ function drawPause() {
     button(LW / 2 - 100, cy + 56, 200, 46, 'QUIT TO MENU', () => quitToMenu(), '#ff3b6b', 16);
     pauseInfo(X.l, cy + 114, X.w, Math.min(ch - 114, 170));
   } else if (tab === 1) drawWeaponsTab(X.l, cy, X.w, ch);
-  else drawPerksTab(X.l, cy, X.w, ch);
+  else if (tab === 2) drawPerksTab(X.l, cy, X.w, ch);
+  else drawTreeTab(X.l, cy, X.w, ch);
 }
 
 // ---------------------------------------------------------------- end screens (victory with loop option / game over)
@@ -260,7 +262,7 @@ function drawEnd(won) {
   overlay(0.84);
   const furthest = won ? 'Loop ' + g.loop + ' · ROOT beaten' : stageName(stageAbs(g));
   const rows = [['Time', fmt(g.time), nb.indexOf('time') >= 0], ['Kills', String(g.kills), nb.indexOf('kills') >= 0], ['Damage dealt', Math.round(g.dmgDealt).toLocaleString(), nb.indexOf('dmg') >= 0],
-    ['Weapons found', String(g.found)], ['Perks taken', String(g.perksTaken.length)], ['Loop / credits', g.loop + ' / ¢' + g.credits], ['Furthest', furthest, nb.indexOf('stage') >= 0 || nb.indexOf('loop') >= 0]];
+    ['Weapons found', String(g.found)], ['Perks / level', g.perksTaken.length + ' / LV ' + g.lvl], ['Loop / credits', g.loop + ' / ¢' + g.credits], ['Furthest', furthest, nb.indexOf('stage') >= 0 || nb.indexOf('loop') >= 0]];
   const sub = won ? 'Loop ' + g.loop + ' cleared: ROOT has been deleted.' : 'Fell in ' + ZONES[g.zone].name + ' · ' + roomLabel(g.cur);
   const bestLine = 'Best: ' + (best.bestStage ? stageName(best.bestStage) : '-') + ' · loop ' + (best.bestLoop || 1) + ' · ' + best.mostKills + ' kills';
   const hc = won ? '#ffe81a' : '#ff2b5c', nextLp = Math.round(g.loop * 35), nextDm = Math.round(Math.min(0.8, 0.12 * g.loop) * 100);
@@ -287,7 +289,7 @@ function drawEnd(won) {
   }
   txt(won ? 'VICTORY!' : 'SYSTEM FAILURE', LW / 2, 62 + SA.t, won ? 42 : 34, hc, 'center', '900');
   fitTxt(sub, LW / 2, 98 + SA.t, LW - 40, 13.5, '#cfd6e6', 'center', '600');
-  txt(g.C.name + ' · ' + g.C.skill, LW / 2, 118 + SA.t, 12, g.C.color, 'center', '800');
+  txt(g.C.name + ' · LV ' + g.lvl + (skillDef(g) ? ' · ' + skillDef(g).name : ''), LW / 2, 118 + SA.t, 12, g.C.color, 'center', '800');
   const rh = 27;
   rr(24, 134 + SA.t, LW - 48, rows.length * rh + 14, 14); ctx.fillStyle = 'rgba(6,9,22,0.8)'; ctx.fill(); nstroke(hc, 1.2, 0.6);
   rows.forEach((r, i) => statRow(r[0], r[1], 158 + SA.t + i * rh, r[2], 40, LW - 40));

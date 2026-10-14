@@ -30,7 +30,8 @@ function withSeat(s, fn) {
   }
 }
 function seatAlive(s) { return !s.off && !s.d.player.downed; }
-function coopTargetFor(e) { let b = null, bd = 1e9; G.seats.forEach(s => { if (!seatAlive(s)) return; const p = s.d.player, d = Math.hypot(p.x - e.x, p.y - e.y); if (d < bd) { bd = d; b = s; } }); return b; }
+// enemies target the nearest living player (cloaked players are ignored while anyone else is visible)
+function coopTargetFor(e) { let b = null, bd = 1e9; G.seats.forEach(s => { if (!seatAlive(s)) return; const p = s.d.player, d = Math.hypot(p.x - e.x, p.y - e.y) + (p.cloak > 0 ? 5000 : 0); if (d < bd) { bd = d; b = s; } }); return b; }
 function coopNearestSeat(o) { return coopTargetFor(o); }
 function coopInit(list) {
   const g = G; g.coop = true; g.host = true; g.paused = false; g.perkT = 0;
@@ -123,6 +124,7 @@ function hostCmd(m) {
       case 'buy': if (state === 'shop') buyOffer(i); break;
       case 'leaveShop': leaveShop(); break;
       case 'risk': riskChoose(i); break;
+      case 'tree': spendNode(String(m.n || ''), i); break;
     }
   });
 }
@@ -159,7 +161,8 @@ function seatDetail(s) {
     cr: d.credits, cs: d.cashT > 0 ? 1 : 0, sl: p.slots.map(serW), ac: p.active, dc: R1(p.dashCd), sk: R1(p.skillT), skm: R1(p.skillMax || 1), P: d.P,
     po: d.perkOffer ? d.perkOffer.map(k => k.id) : null, pt: d.perksTaken, pc: d.perkCount, rr: d.rerolls, bn: d.banishes, pm: d.perkMode,
     near: d.near ? d.near.nid : 0, toast: d.toast ? { head: d.toast.head, w: serW(d.toast.w), t: R1(d.toast.t), m: d.toast.m } : null,
-    shop: serShop(d.shop), risk: d.risk, found: d.found, fl: R1(d.flash || 0)
+    shop: serShop(d.shop), risk: d.risk, found: d.found, fl: R1(d.flash || 0),
+    tr: { xp: Math.floor(d.xp), lv: d.lvl, pt: d.pts, t: d.tree, c: d.choice, sk: d.skill }, sh: d.shield
   };
 }
 function buildSnap() {
@@ -176,12 +179,12 @@ function buildSnap() {
     pb: g.bullets.map(b => [R1(b.x), R1(b.y), R1(b.stuck ? 0 : b.vx), R1(b.stuck ? 0 : b.vy), R1(b.size), b.color, b.stuck ? 1 : 0]),
     it: g.items.map(it => it.kind === 'weapon' ? [it.nid, 'w', R1(it.x), R1(it.y), serW(it.w)] : [it.nid, it.kind, R1(it.x), R1(it.y)]),
     ch: g.chests.map(c => [R1(c.x), R1(c.y), c.open ? 1 : 0, c.locked ? 1 : 0, R1(c.t)]),
-    tu: g.turrets.map(t => [R1(t.x), R1(t.y), R1(t.aim), R1(t.life), t.max]),
-    de: g.decoys.map(d => [R1(d.x), R1(d.y), R1(d.life), d.max, d.face]),
+    tu: g.turrets.map(t => [R1(t.x), R1(t.y), R1(t.aim), R1(t.life), t.max, t.kind || 'turret', t.spawn > 0 ? 1 : 0]),
+    de: g.decoys.filter(d => !d.hidden).map(d => [R1(d.x), R1(d.y), R1(d.life), d.max, d.face]),
     pa: g.patches.map(f => [R1(f.x), R1(f.y), f.r, R1(f.life), f.max]),
     fx: [], nm: [], ev: EVQ.splice(0, EVQ.length),
     S: g.seats.map(s => { const p = s.d.player, w = p.slots[p.active]; return { id: s.id, nm: s.name, c: s.d.C.id, x: R1(p.x), y: R1(p.y), aim: R1(p.aim), face: R1(p.face), hp: R1(Math.max(0, p.hp)), mh: s.d.P.maxHp,
-      dn: p.downed ? 1 : 0, rv: R1(p.rv || 0), ifr: R1(p.iframes), dt: R1(p.dashT), od: p.overdrive > 0 ? 1 : 0, hs: p.haste > 0 ? 1 : 0, am: p.ambush ? 1 : 0, w: w ? [w.type, w.rarity] : null, off: s.off ? 1 : 0, ack: s.inp.seq, ui: s.ui }; }),
+      dn: p.downed ? 1 : 0, ck: p.cloak > 0 ? 1 : 0, bo: p.boost > 0 ? 1 : 0, su: p.surge > 0 ? 1 : 0, lv: s.d.lvl, rv: R1(p.rv || 0), ifr: R1(p.iframes), dt: R1(p.dashT), od: p.overdrive > 0 ? 1 : 0, hs: p.haste > 0 ? 1 : 0, am: p.ambush ? 1 : 0, w: w ? [w.type, w.rarity] : null, off: s.off ? 1 : 0, ack: s.inp.seq, ui: s.ui }; }),
     D: {}
   };
   g.fx.forEach(f => { if (!f._s) { f._s = 1; m.fx.push(f); } });
@@ -214,7 +217,8 @@ const ORIG = {};
 const CLIENT_FNS = {
   doDash() { const g = G; if (!g || state !== 'play') return; const p = g.player; if (p.downed) return; netSend({ t: 'cmd', c: 'dash' });
     if (p.dashCd <= 0 && p.dashT <= 0) { let dx = g.mvx, dy = g.mvy; if (Math.hypot(dx, dy) < 0.1) { dx = Math.cos(p.face); dy = Math.sin(p.face); } const l = Math.hypot(dx, dy) || 1; p.dashDx = dx / l; p.dashDy = dy / l; p.dashT = 0.17; p.dashCd = g.P.dashCd; ORIG.sfx('dash', 400, 0.15, 'sine', 0.06, 2.2); } },
-  useSkill() { if (state === 'play' && !G.player.downed) netSend({ t: 'cmd', c: 'skill' }); return true; },
+  useSkill() { if (state !== 'play' || G.player.downed) return false; if (!G.skill) { if (G.pts > 0) openTree(); return false; } netSend({ t: 'cmd', c: 'skill' }); return true; },
+  spendNode(n, i) { if (!G || G.pts <= 0) return false; netSend({ t: 'cmd', c: 'tree', n: String(n), i: i | 0 }); G.pts--; if (n === 'skill') G.skill = treeOf(G).skills[i | 0]; else { G.tree[n] = (G.tree[n] || 0) + 1; if (NODE_BY_ID[n] && NODE_BY_ID[n].kind === 'choice') G.choice[n] = i | 0; } return true; },
   pickupNear(i) { if (state === 'play' && G.near) netSend({ t: 'cmd', c: 'pick', i }); return true; },
   swapWeapon(i) { if (state === 'play') { if (i == null) i = 1 - G.player.active; netSend({ t: 'cmd', c: 'swap', i }); } },
   pickOffer(i) { netSend({ t: 'cmd', c: 'perk', i, b: !!G.banishMode }); G.banishMode = false; G.perkOffer = null; },
@@ -246,8 +250,9 @@ function clientStart(seats) {
 function clientSnap(m) {
   const g = G; if (!g || !g.client) return;
   NET.stats.snaps++;
-  const H = m.A, sx = ARENA.w / H[2], sy = ARENA.h / H[3], k = Math.min(sx, sy);
-  const X = x => ARENA.x + (x - H[0]) * sx, Y = y => ARENA.y + (y - H[1]) * sy;
+  const H = m.A;
+  if (ARENA.x !== H[0] || ARENA.y !== H[1] || ARENA.w !== H[2] || ARENA.h !== H[3]) { ARENA.x = H[0]; ARENA.y = H[1]; ARENA.w = H[2]; ARENA.h = H[3]; cam.init = false; }
+  const sx = 1, sy = 1, k = 1, X = x => x, Y = y => y;
   g.map = { sx, sy, k };
   g.waiting = false;
   g.room = m.room; g.zone = m.zone; g.loop = m.loop; g.cur = m.cur; g.plan = []; g.plan[m.room] = m.nx; g.roomState = m.rs; g.doorOpen = m.door; g.kills = m.kills; g.dmgDealt = m.dmg;
@@ -277,7 +282,7 @@ function clientSnap(m) {
   m.it.forEach(a => { let it = g.itMap.get(a[0]); const tx = X(a[2]), ty = Y(a[3]); if (!it) it = { nid: a[0], x: tx, y: ty, t: 0 }; it.kind = a[1] === 'w' ? 'weapon' : a[1]; if (a[4]) it.w = a[4]; it.tx = tx; it.ty = ty; im.set(a[0], it); });
   g.itMap = im; g.items = [...im.values()];
   g.chests = m.ch.map(c => ({ x: X(c[0]), y: Y(c[1]), open: !!c[2], locked: !!c[3], t: c[4] }));
-  g.turrets = m.tu.map(t => ({ x: X(t[0]), y: Y(t[1]), aim: t[2], life: t[3], max: t[4], spawn: 0 }));
+  g.turrets = m.tu.map(t => ({ x: X(t[0]), y: Y(t[1]), aim: t[2], life: t[3], max: t[4], kind: t[5], spawn: t[6] ? 1 : 0 }));
   g.decoys = m.de.map(d => ({ x: X(d[0]), y: Y(d[1]), life: d[2], max: d[3], face: d[4] }));
   g.patches = m.pa.map(f => ({ x: X(f[0]), y: Y(f[1]), r: f[2] * k, life: f[3], max: f[4] }));
   m.fx.forEach(f => { const o = Object.assign({}, f); if (o.x != null) { o.x = X(o.x); o.y = Y(o.y); } if (o.x1 != null) { o.x1 = X(o.x1); o.y1 = Y(o.y1); o.x2 = X(o.x2); o.y2 = Y(o.y2); } if (o.r != null) o.r *= k; if (o.max != null && o.t === 'ring') o.max *= k; if (g.fx.length < 120) g.fx.push(o); });
@@ -291,7 +296,7 @@ function clientSnap(m) {
     let v = g.views[o.id]; const tx = X(o.x), ty = Y(o.y);
     if (!v) v = g.views[o.id] = { id: o.id, p: { x: tx, y: ty, r: 9, slots: [null], active: 0, recoil: 0 } };
     const p = v.p; v.name = o.nm; v.C = CLASS_BY_ID[o.c] || CLASSES[0]; v.off = !!o.off;
-    p.tx = tx; p.ty = ty; p.aim = o.aim; p.face = o.face; p.hp = o.hp; p.mh = o.mh; p.downed = !!o.dn; p.rv = o.rv; p.iframes = o.ifr; p.dashT = o.dt; p.overdrive = o.od; p.haste = o.hs; p.ambush = !!o.am; p.r = 9 * k;
+    p.tx = tx; p.ty = ty; p.aim = o.aim; p.face = o.face; p.hp = o.hp; p.mh = o.mh; p.downed = !!o.dn; p.rv = o.rv; p.iframes = o.ifr; p.dashT = o.dt; p.overdrive = o.od; p.haste = o.hs; p.ambush = !!o.am; p.cloak = o.ck; p.boost = o.bo; p.surge = o.su; p.r = 9 * k;
     p.slots[0] = o.w ? { type: o.w[0], rarity: o.w[1] } : null;
     if (Math.hypot(tx - p.x, ty - p.y) > 80) { p.x = tx; p.y = ty; }
   });
@@ -300,7 +305,7 @@ function clientSnap(m) {
 }
 function clientOwn(o, sxp, syp, m) {
   const g = G, p = g.player;
-  p.hp = o.hp; p.downed = !!o.dn; p.rv = o.rv; p.iframes = o.ifr; p.aim = o.aim; p.overdrive = o.od; p.haste = o.hs; p.ambush = !!o.am; p.r = 9 * g.map.k;
+  p.hp = o.hp; p.downed = !!o.dn; p.rv = o.rv; p.iframes = o.ifr; p.aim = o.aim; p.overdrive = o.od; p.haste = o.hs; p.ambush = !!o.am; p.cloak = o.ck; p.boost = o.bo; p.surge = o.su; p.r = 9 * g.map.k;
   if (g.P.maxHp !== o.mh) g.P.maxHp = o.mh;
   // reconciliation: compare the host position (+ how far we expect to have moved since that input) with our prediction
   const sent = NET.seqT[o.ack], lat = sent ? Math.min(0.6, (performance.now() - sent) / 1000) : 0.15;
@@ -324,6 +329,8 @@ function clientDetail(D, X, Y) {
   if ('po' in D) { g.perkOffer = D.po ? D.po.map(id => PERK_BY_ID[id]).filter(Boolean) : null; if (!g.perkOffer) g.banishMode = false; }
   if ('pt' in D) g.perksTaken = D.pt; if ('pc' in D) g.perkCount = D.pc; if ('rr' in D) g.rerolls = D.rr; if ('bn' in D) g.banishes = D.bn; if ('pm' in D) g.perkMode = D.pm;
   if ('near' in D) g.nearId = D.near;
+  if ('tr' in D) { const T = D.tr; if (T.lv > g.lvl) g.lvlT = 2.6; g.xp = T.xp; g.lvl = T.lv; g.pts = T.pt; g.tree = T.t || {}; g.choice = T.c || {}; g.skill = T.sk; }
+  if ('sh' in D) g.shield = D.sh;
   if ('toast' in D) g.toast = D.toast;
   if ('shop' in D) g.shopRaw = D.shop; if ('risk' in D) g.riskRaw = D.risk; if ('found' in D) g.found = D.found; if ('fl' in D) g.flash = Math.max(g.flash, D.fl);
   g.shop = g.shopRaw ? Object.assign({}, g.shopRaw, { x: X(g.shopRaw.x), y: Y(g.shopRaw.y), offers: g.shopRaw.offers.map(o => o.kind === 'perk' ? Object.assign({}, o, { perk: PERK_BY_ID[o.perk] }) : o) }) : null;
@@ -390,7 +397,7 @@ function coopDrawPlayers(t) {
 }
 function coopHud(L, t) {
   const g = G, V = coopViews().filter(v => !v.mine);
-  const x0 = ARENA.x + ARENA.w - 98, y0 = ARENA.y + (g.boss && !g.boss.dead ? 22 : 8) + (g.gaunt ? 30 : 0);
+  const x0 = VIEW.x + VIEW.w - 98, y0 = VIEW.y + (g.boss && !g.boss.dead ? 22 : 8) + (g.gaunt ? 30 : 0);
   V.forEach((v, i) => {
     const y = y0 + i * 16, p = v.p, mh = p.mh || (v.mine ? g.P.maxHp : 100), f = clamp(p.hp / mh, 0, 1);
     ctx.fillStyle = 'rgba(2,3,10,0.6)'; ctx.fillRect(x0 - 4, y - 6, 98, 14);
@@ -400,10 +407,10 @@ function coopHud(L, t) {
     if (p.downed) txt('DOWN', x0 + 70, y + 1, 7.5, '#fff', 'center', '800');
   });
   const tag = 'CO-OP ' + (NET.code || '') + (g.client && NET.ping ? ' · ' + NET.ping + 'ms' : '') + (g.paused ? ' · HOST PAUSED' : '');
-  txt(tag, ARENA.x + 6, ARENA.y + ARENA.h - 8, 9, '#8a93ab', 'left', '700');
+  txt(tag, VIEW.x + 6, VIEW.y + VIEW.h - 8, 9, '#8a93ab', 'left', '700');
   const p = g.player;
-  if (p.downed && state === 'play') { const cx = ARENA.x + ARENA.w / 2, cy = ARENA.y + ARENA.h * 0.62; txt('YOU ARE DOWN', cx, cy, 20, '#ff2b5c', 'center', '900'); txt('A teammate can revive you by standing next to you', cx, cy + 20, 10.5, '#cfd6e6', 'center', '700'); }
-  if (g.roomState === 'clear' && !g.doorOpen && g.perkT > 0 && state === 'play' && !g.perkOffer) txt('Waiting for teammates to pick perks · ' + g.perkT + 's', ARENA.x + ARENA.w / 2, ARENA.y + ARENA.h * 0.5, 11, '#ffe81a', 'center', '800');
+  if (p.downed && state === 'play') { const cx = VIEW.x + VIEW.w / 2, cy = VIEW.y + VIEW.h * 0.62; txt('YOU ARE DOWN', cx, cy, 20, '#ff2b5c', 'center', '900'); txt('A teammate can revive you by standing next to you', cx, cy + 20, 10.5, '#cfd6e6', 'center', '700'); }
+  if (g.roomState === 'clear' && !g.doorOpen && g.perkT > 0 && state === 'play' && !g.perkOffer) txt('Waiting for teammates to pick perks · ' + g.perkT + 's', VIEW.x + VIEW.w / 2, VIEW.y + VIEW.h * 0.5, 11, '#ffe81a', 'center', '800');
 }
 function coopOverlay() {
   const g = G;
@@ -557,10 +564,10 @@ function lobbyRender() {
   NET.msg = NET.msg === 'Connecting… (the server may take ~50s to wake up)' ? '' : NET.msg; $('nvc-msg').textContent = NET.msg || '';
   $('nvc-rc').textContent = NET.code; $('nvc-link').textContent = inviteUrl();
   const host = NET.role === 'host';
-  $('nvc-players').innerHTML = L.players.map(p => { const C = CLASS_BY_ID[p.cls] || CLASSES[0]; return `<li><span style="color:${C.color}">${esc(p.name)}${p.pid === NET.pid ? ' (you)' : ''}<br><small>${C.name} · ${C.skill}</small></span><span class="${p.host || p.ready ? 'ok' : 'no'}">${p.off ? 'offline' : p.host ? 'HOST' : p.ready ? 'READY' : 'not ready'}</span></li>`; }).join('');
+  $('nvc-players').innerHTML = L.players.map(p => { const C = CLASS_BY_ID[p.cls] || CLASSES[0]; return `<li><span style="color:${C.color}">${esc(p.name)}${p.pid === NET.pid ? ' (you)' : ''}<br><small>${C.name} · ${C.branches}</small></span><span class="${p.host || p.ready ? 'ok' : 'no'}">${p.off ? 'offline' : p.host ? 'HOST' : p.ready ? 'READY' : 'not ready'}</span></li>`; }).join('');
   const meP = L.players.find(p => p.pid === NET.pid); if (meP) NET.myCls = meP.cls;
   const C = CLASS_BY_ID[NET.myCls] || CLASSES[0];
-  $('nvc-cls').innerHTML = `<span style="color:${C.color}">${C.name.toUpperCase()}</span><small>${esc(C.passive)} · Skill: ${esc(C.skill)}</small>`;
+  $('nvc-cls').innerHTML = `<span style="color:${C.color}">${C.name.toUpperCase()}</span><small>Pistol start · tree: ${esc(C.branches)}</small>`;
   $('nvc-ready').hidden = host; $('nvc-ready').textContent = NET.ready ? 'READY ✓ (tap to cancel)' : 'READY';
   $('nvc-start').hidden = !host;
   const allReady = L.players.every(p => p.host || p.ready);

@@ -89,7 +89,32 @@ try {
   const db = await pages[1].evaluate(() => { const L = layout(); return { x: offX + L.dash.x * scale, y: offY + L.dash.y * scale }; });
   await pages[1].touchscreen.tap(db.x, db.y); await sleep(500);
   ok('client DASH reaches host', await H.evaluate(id => G.seats.find(s => s.id === id).d.player.dashCd > 0, pidB));
-  const sb = await pages[1].evaluate(() => { const L = layout(); return { x: offX + L.skill.x * scale, y: offY + L.skill.y * scale }; });
+  // ---------- per-player XP / tree, synced host <-> client
+  let tr = await pages[1].evaluate(() => ({ skill: G.skill, lvl: G.lvl, pts: G.pts, start: G.player.slots[0].type }));
+  ok('client starts at level 1 with a pistol and no skill', tr.skill === null && tr.lvl === 1 && tr.pts === 0 && tr.start === 'pistol', tr);
+  await H.evaluate(id => { const s = G.seats.find(s => s.id === id); COOP.withSeat(s, () => TDR.gainXp(TDR.xpNeed(1) + 2)); }, pidB);
+  tr = await until(pages[1], () => G.lvl === 2 && G.pts === 1 && G.lvlT > 0 && { lvl: G.lvl, pts: G.pts }, null, 5000);
+  ok('host-granted XP levels up only that client (synced, toast shown)', !!tr && await H.evaluate(id => G.seats.filter(s => s.id !== id).every(s => s.d.lvl === 1), pidB), tr);
+  let sb = await pages[1].evaluate(() => { const L = layout(); return { x: offX + L.skill.x * scale, y: offY + L.skill.y * scale }; });
+  await pages[1].touchscreen.tap(sb.x, sb.y); await sleep(300);
+  ok('client locked skill button opens its TREE tab', await pages[1].evaluate(() => TDR.state === 'pause' && G.pauseTab === 3));
+  await pages[1].evaluate(() => TDR.render()); await pages[1].screenshot({ path: OUT + '/c02-client-skill-pick.png' });
+  ok('client taps skill card 2', await tapHot(pages[1], /^skill1$/)); await sleep(500);
+  tr = await H.evaluate(id => { const s = G.seats.find(s => s.id === id); return { skill: s.d.skill, want: TDR.TREES[s.d.P.cls].skills[1], pts: s.d.pts }; }, pidB);
+  ok('client skill choice applied on the host', tr.skill === tr.want, tr);
+  await H.evaluate(id => { const s = G.seats.find(s => s.id === id); COOP.withSeat(s, () => { for (let i = 0; i < 3; i++) TDR.gainXp(TDR.xpNeed(G.lvl)); }); }, pidB);
+  await until(pages[1], () => G.pts >= 3, null, 5000);
+  const nid = await pages[1].evaluate(() => TDR.TREES[G.P.cls].branches[0].nodes[0].id);
+  await pages[1].evaluate(n => { TDR.render(); }, nid);
+  const tapped = await tapHot(pages[1], new RegExp('^node:' + nid + '$')); await sleep(200); await pages[1].evaluate(() => TDR.render());
+  const spent = await tapHot(pages[1], /^SPEND POINT/); await sleep(500);
+  tr = await H.evaluate((id, n) => { const s = G.seats.find(s => s.id === id); return { rank: s.d.tree[n] || 0, pts: s.d.pts, hostRank: G.seats[0].d.tree[n] || 0 }; }, pidB, nid);
+  await sleep(300); const tr2 = await H.evaluate(id => G.seats.find(s => s.id === id).d.pts, pidB);
+  const ct = await pages[1].evaluate(n => ({ rank: G.tree[n] || 0, pts: G.pts }), nid);
+  ok('client spends a tree point via the Tree tab; host + client agree', tapped && spent && tr.rank === 1 && ct.rank === 1 && ct.pts === tr2 && tr.hostRank === 0, { tapped, spent, tr, tr2, ct });
+  await pages[1].screenshot({ path: OUT + '/c03-client-tree.png' });
+  await pages[1].evaluate(() => TDR.setState('play')); await sleep(200);
+  sb = await pages[1].evaluate(() => { const L = layout(); return { x: offX + L.skill.x * scale, y: offY + L.skill.y * scale }; });
   await pages[1].touchscreen.tap(sb.x, sb.y); await sleep(500);
   ok('client SKILL reaches host', await H.evaluate(id => G.seats.find(s => s.id === id).d.player.skillT > 0, pidB));
   // ---------- calm the room for the deterministic parts
