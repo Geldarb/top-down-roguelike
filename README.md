@@ -3,7 +3,7 @@
 A short-run, loot-driven **neon top-down roguelike shooter** you can play with **one thumb** on your phone
 (portrait or landscape) or with keyboard/mouse on desktop. Vanilla canvas, no build step.
 
-**Play:** https://top-down-roguelike.onrender.com
+**Play:** https://top-down-roguelike.onrender.com (single-player + co-op) · co-op server / alt URL: https://neon-vault-coop.onrender.com
 
 ## Controls
 
@@ -53,3 +53,26 @@ npm start              # python static server on :8080
 ```
 
 Deployed as a Render static site (`render.yaml`), auto-deploys on push to `main`.
+
+## Online co-op (1-4 players)
+
+Main menu → **CO-OP** → enter a name → **CREATE ROOM** (4-character code) or type a code and **JOIN**.
+**SHARE INVITE LINK** sends `…/?room=CODE`, which opens the game and joins automatically. Everyone picks a class
+(duplicates allowed) and taps **READY**; the host taps **START RUN**.
+
+* **Netcode:** host-authoritative. The host's browser runs the normal simulation with one "seat" (HP, weapons, skill,
+  perks, credits, shop) per player; clients send joystick/dash/skill/pickup/swap/perk/shop commands and render 20 Hz
+  snapshots (smoothed; own movement is predicted and reconciled). `server/index.js` (Node + `ws`) only relays and runs the
+  lobby, and also serves the static game, so one URL works.
+* **Rules:** enemies target the nearest living player; enemy HP ×(1 + 0.65 per extra player); chests drop one extra
+  weapon per extra player; floor weapons are shared, first to pick up gets it. Each player picks their own perk after a
+  room; the door opens when all have chosen (30 s auto-skip). Any player walking through the door moves the team.
+  At 0 HP you are **downed**: a teammate standing next to you for 3 s revives you (35% HP); downed players also get up at
+  30% when the room is cleared. The run ends when everyone is down. Loop (New Game+) works in co-op.
+* **Pause:** the pause menu opens but the run keeps going; the host has **PAUSE ALL PLAYERS**.
+* **Disconnects:** a dropped client has 30 s to reconnect automatically; if the host leaves, the run ends for everyone
+  with a message.
+* Each device keeps its own portrait/landscape layout; the shared arena is mapped onto each screen.
+
+Run locally: `cd server && npm install && cd .. && npm start` → http://localhost:8080. Tests: `npm test`
+(single-player smoke + 4-client co-op test; `COOP_URL=https://… node test/coop.mjs` runs a 2-client check against a deployment).

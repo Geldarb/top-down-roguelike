@@ -3,6 +3,14 @@
   "version": "1.0.0",
   "description": "Neon Vault - one-thumb neon top-down roguelike shooter (vanilla canvas)",
   "private": true,
-  "scripts": { "test": "node test/smoke.mjs", "start": "python3 -m http.server 8080" },
-  "devDependencies": { "puppeteer-core": "^25.13.0" }
+  "scripts": {
+    "test": "node test/smoke.mjs && node test/coop.mjs",
+    "test:sp": "node test/smoke.mjs",
+    "test:coop": "node test/coop.mjs",
+    "start": "node server/index.js",
+    "static": "python3 -m http.server 8080"
+  },
+  "devDependencies": {
+    "puppeteer-core": "^25.13.0"
+  }
 }

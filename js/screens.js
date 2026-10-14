@@ -236,7 +236,7 @@ function drawPause() {
     if (tab === 0) {
       const bw = Math.min(220, X.w * 0.4);
       button(X.l, cy, bw, 44, muted ? 'SOUND: OFF' : 'SOUND: ON', () => { muted = !muted; }, '#7b8cff', 15);
-      button(X.l, cy + 54, bw, 44, 'QUIT TO MENU', () => { state = 'menu'; G = null; resize(); }, '#ff3b6b', 15);
+      button(X.l, cy + 54, bw, 44, 'QUIT TO MENU', () => quitToMenu(), '#ff3b6b', 15);
       pauseInfo(X.l + bw + 16, cy, X.w - bw - 16, Math.min(ch, 150));
     } else if (tab === 1) drawWeaponsTab(X.l, cy, X.w, ch);
     else drawPerksTab(X.l, cy, X.w, ch);
@@ -248,7 +248,7 @@ function drawPause() {
   button(LW / 2 - 100, by, 200, 44, 'RESUME', () => { state = 'play'; }, '#19f0ff', 18);
   if (tab === 0) {
     button(LW / 2 - 100, cy, 200, 46, muted ? 'SOUND: OFF' : 'SOUND: ON', () => { muted = !muted; }, '#7b8cff', 16);
-    button(LW / 2 - 100, cy + 56, 200, 46, 'QUIT TO MENU', () => { state = 'menu'; G = null; resize(); }, '#ff3b6b', 16);
+    button(LW / 2 - 100, cy + 56, 200, 46, 'QUIT TO MENU', () => quitToMenu(), '#ff3b6b', 16);
     pauseInfo(X.l, cy + 114, X.w, Math.min(ch - 114, 170));
   } else if (tab === 1) drawWeaponsTab(X.l, cy, X.w, ch);
   else drawPerksTab(X.l, cy, X.w, ch);
@@ -273,6 +273,7 @@ function drawEnd(won) {
     const ey = SA.t + 92 + rows.length * rh + 18;
     if (nb.length) txt('★ NEW PERSONAL BEST ★', cl, ey, 13, '#ffe81a', 'center', '800');
     txt(bestLine, cl, ey + 20, 11, '#9aa4bd', 'center', '600', false);
+    if (g.coop) { coopEndButtons(won, cr, SA.t + 70); return; }
     if (won) {
       button(cr - 110, SA.t + 70, 220, 62, 'LOOP (NEW GAME+)', () => startLoop(), '#ffe81a', 17);
       fitTxt('Keep weapons, perks & stats. Enemies +' + nextLp + '% HP, +' + nextDm + '% dmg, better drops.', cr, SA.t + 146, 230, 10.5, '#cfd6e6', 'center', '600');
@@ -280,7 +281,7 @@ function drawEnd(won) {
     } else {
       button(cr - 100, SA.t + 80, 200, 52, 'RUN AGAIN', () => newRun(g.C.id), '#19f0ff', 19);
       button(cr - 100, SA.t + 142, 200, 44, 'CHANGE CLASS', () => { state = 'select'; }, '#ff2bd6', 15);
-      button(cr - 100, SA.t + 196, 200, 40, 'MENU', () => { state = 'menu'; G = null; resize(); }, '#7b8cff', 15);
+      button(cr - 100, SA.t + 196, 200, 40, 'MENU', () => quitToMenu(), '#7b8cff', 15);
     }
     return;
   }
@@ -294,6 +295,7 @@ function drawEnd(won) {
   if (nb.length) txt('★ NEW PERSONAL BEST ★', LW / 2, ey, 13, '#ffe81a', 'center', '800');
   fitTxt(bestLine, LW / 2, ey + 19, LW - 40, 11, '#9aa4bd', 'center', '600');
   const by = ey + 40;
+  if (g.coop) { coopEndButtons(won, LW / 2, by); return; }
   if (won) {
     button(LW / 2 - 120, by, 240, 62, 'LOOP (NEW GAME+)', () => startLoop(), '#ffe81a', 19);
     fitTxt('Keep weapons, perks & stats · enemies +' + nextLp + '% HP, +' + nextDm + '% dmg · better drops', LW / 2, by + 78, LW - 30, 10.5, '#cfd6e6', 'center', '600');
@@ -301,6 +303,6 @@ function drawEnd(won) {
   } else {
     button(LW / 2 - 100, by, 200, 52, 'RUN AGAIN', () => newRun(g.C.id), '#19f0ff', 20);
     button(LW / 2 - 100, by + 62, 200, 42, 'CHANGE CLASS', () => { state = 'select'; }, '#ff2bd6', 15);
-    button(LW / 2 - 100, by + 114, 200, 40, 'MENU', () => { state = 'menu'; G = null; resize(); }, '#7b8cff', 15);
+    button(LW / 2 - 100, by + 114, 200, 40, 'MENU', () => quitToMenu(), '#7b8cff', 15);
   }
 }

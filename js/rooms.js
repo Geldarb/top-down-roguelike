@@ -43,9 +43,9 @@ function startRoom(n, forceKind) {
   if (forceKind) cur = forceKind === 'boss' ? { zone: ZONE_OF_STAGE[n - 1], kind: 'boss', boss: BOSS_AT[n] || 'sentinel', n, rn: 1, zr: 1 } : { zone: ZONE_OF_STAGE[n - 1], kind: forceKind, n, rn: 1, zr: 1 };
   g.cur = cur; g.room = n; g.zone = cur.zone;
   g.roomState = 'fight'; g.doorOpen = false; g.boss = null;
-  g.enemies.length = 0; g.bullets.length = 0; g.ebullets.length = 0; g.items.length = 0; g.chests.length = 0; g.patches.length = 0; g.fx.length = 0; g.timers.length = 0; g.nums.length = 0; g.near = null; g.turrets.length = 0; g.decoys.length = 0;
-  g.lasers = []; g.pools = []; g.tiles = []; g.safe = null; g.gaunt = null; g.shop = null; g.risk = null; g.sentries = null;
-  g.shield = g.P.shield;
+  g.enemies.length = 0; g.bullets.length = 0; g.ebullets.length = 0; g.items.length = 0; g.chests.length = 0; g.patches.length = 0; g.fx.length = 0; g.timers.length = 0; g.nums.length = 0; g.turrets.length = 0; g.decoys.length = 0;
+  g.lasers = []; g.pools = []; g.tiles = []; g.safe = null; g.gaunt = null; g.sentries = null;
+  forEachSeat(() => { G.near = null; G.shop = null; G.risk = null; G.shield = G.P.shield; });
   const noFoes = cur.kind === 'shop' || cur.kind === 'risk';
   g.hardOn = !!(g.hardNext && !noFoes); if (g.hardOn) g.hardNext = false;
   const lp = g.loop - 1;
@@ -56,8 +56,8 @@ function startRoom(n, forceKind) {
   g.loopLuck = 0.35 * lp;
   genPillars(cur);
   setupHazardLayout(cur);
-  const p = g.player;
-  p.x = ARENA.x + ARENA.w / 2; p.y = ARENA.y + ARENA.h - 34; p.vx = p.vy = 0; p.dashT = 0; p.iframes = 1;
+  forEachSeat((i, n) => { const p = G.player; p.x = ARENA.x + ARENA.w / 2 + (i - (n - 1) / 2) * 30; p.y = ARENA.y + ARENA.h - 34; p.vx = p.vy = 0; p.dashT = 0; p.iframes = 1;
+    if (p.downed) { p.downed = false; p.rv = 0; p.hp = Math.max(1, Math.round(G.P.maxHp * 0.3)); } });
   g.fade = 1;
   g.floor = makeFloor(n);
   g.waveIdx = 0; g.pending = 0; g.perkDone = false; g.endT = 0; g.waves = [];
@@ -79,8 +79,8 @@ function startRoom(n, forceKind) {
       const e = addEnemy('elite', ARENA.x + ARENA.w / 2, ARENA.y + 100, g.hpMul);
       e.elite = true; e.title = ELITE_NAMES[cur.zone] || 'Elite'; e.color = ZONES[cur.zone].col; e.spawnT = 1.2; e.atk = 2; e.n = 0;
       g.banner.sub = 'ELITE: ' + e.title; break; }
-    case 'shop': setupShop(); break;
-    case 'risk': setupRisk(); break;
+    case 'shop': forEachSeat(() => setupShop()); break;
+    case 'risk': forEachSeat(() => setupRisk()); break;
   }
 }
 
@@ -146,23 +146,24 @@ function mirrorAt(x, y) { const P = G.pillars; for (let i = 0; i < P.length; i++
 function laserState(l, t) { const u = (t + l.ph) % l.per; return u < l.on ? 2 : u > l.per - l.warn ? 1 : 0; }     // 2 = firing, 1 = warning, 0 = off
 function tileState(q, t) { const u = (t + q.ph) % 5; return u > 3.4 && u < 4.4 ? 2 : u > 2.4 && u <= 3.4 ? 1 : 0; }
 function segDist(px, py, x1, y1, x2, y2) { const dx = x2 - x1, dy = y2 - y1, l2 = dx * dx + dy * dy || 1; let u = ((px - x1) * dx + (py - y1) * dy) / l2; u = clamp(u, 0, 1); return Math.hypot(px - (x1 + u * dx), py - (y1 + u * dy)); }
-function updateHazards(dt) {
+function updateHazards(dt, noShrink) {
   const g = G, p = g.player;
   if (g.lasers.length) g.lasers.forEach(l => { l.s = laserState(l, g.time); if (l.s === 2 && segDist(p.x, p.y, l.x1, l.y1, l.x2, l.y2) < p.r + 2.5) hurtPlayer(14 * g.bulMul); });
   if (g.tiles.length) g.tiles.forEach(q => { q.s = tileState(q, g.time); if (q.s === 2 && p.x > q.x - p.r * 0.5 && p.x < q.x + q.w + p.r * 0.5 && p.y > q.y - p.r * 0.5 && p.y < q.y + q.h + p.r * 0.5) hurtPlayer(10 * g.bulMul); });
   const s = g.safe;
   if (s && s.on) {
-    if (s.delay > 0) s.delay -= dt; else s.r = Math.max(s.min, s.r - s.rate * dt);
-    s.tick -= dt;
-    if (Math.hypot(p.x - s.cx, p.y - s.cy) > s.r) { if (s.tick <= 0) { s.tick = 0.6; hurtPlayer(7 * g.bulMul); } }
+    if (!noShrink) { if (s.delay > 0) s.delay -= dt; else s.r = Math.max(s.min, s.r - s.rate * dt); }
+    if (!g.coop) s.tick -= dt; else { p.safeT = (p.safeT || 0) - dt; }
+    if (Math.hypot(p.x - s.cx, p.y - s.cy) > s.r) { if (!g.coop) { if (s.tick <= 0) { s.tick = 0.6; hurtPlayer(7 * g.bulMul); } } else if (p.safeT <= 0) { p.safeT = 0.6; hurtPlayer(7 * g.bulMul); } }
   }
 }
 
 // ---------------------------------------------------------------- enemies / waves
 function addEnemy(t, x, y, hpMul) {
-  const T = ENEMY_TYPES[t], hm = hpMul == null ? G.hpMul : hpMul;
+  const T = ENEMY_TYPES[t], hm = (hpMul == null ? G.hpMul : hpMul) * coopHpMul();
   const e = { type: t, x, y, vx: 0, vy: 0, r: T.r, hp: T.hp * hm, max: T.hp * hm, speed: T.speed * rnd(0.92, 1.08), dmg: T.dmg * (1 + (G.room - 1) * 0.04),
               spawnT: 0.75, hitT: 0, atk: rnd(0.8, 2), cd: 0, burn: 0, burnDps: 0, burnTick: 0, slow: 0, state: 0, st: 0, ang: 0, dead: false, wob: rnd(0, 6), fixed: !!T.fixed };
+  e.nid = (G.nidC = (G.nidC || 0) + 1);
   G.enemies.push(e); return e;
 }
 function zonePool(z, s) {
@@ -211,7 +212,7 @@ function spawnBossFor(kind) {
   } else if (kind === 'twin') {
     const p = g.player, w = cloneWeapon(p.slots[p.active] || p.slots[0], 1), C = g.C;
     const hp = clamp(1050 + weaponDps(w) * 11, 1300, 2600) * bm / 1;
-    const e = mk('twin', cx, ARENA.y + 90, 1, 'MIRROR TWIN'); e.max = e.hp = hp; e.w = w; e.cls = C.id; e.color = C.color; e.atk = 2; e.fcd = 1.6; e.skCd = 4.5; e.dir = 1; e.dirT = 2; e.dmg = 15; e.r = 11;
+    const e = mk('twin', cx, ARENA.y + 90, 1, 'MIRROR TWIN'); e.max = e.hp = hp * coopHpMul(); e.w = w; e.cls = C.id; e.color = C.color; e.atk = 2; e.fcd = 1.6; e.skCd = 4.5; e.dir = 1; e.dirT = 2; e.dmg = 15; e.r = 11;
   } else if (kind === 'root') {
     const e = mk('root', cx, ARENA.y + 82, bm, 'ROOT'); e.spawnT = 2.0; e.sumT = 3.5; e.orb = 0; e.nodes = []; e.atk = 2.2; e.fixed = true;
     e.dmg = 22;
@@ -481,28 +482,40 @@ function roomCleared() {
   }
   if (g.gaunt) { const bonus = 30 + g.room * 3; for (let i = 0; i < 5; i++) spawnCredit(cx + rnd(-30, 30), cy + rnd(-20, 20), bonus / 5); g.banner = { text: 'GAUNTLET SURVIVED', sub: '+' + Math.round(bonus * (1 + g.P.credit) * g.credMul) + ' bonus credits', t: 1.8, col: '#ff5a3c' }; }
   g.items.forEach(it => { if (it.kind === 'credit') it.fly = true; });
-  const p = g.player; p.hp = Math.min(g.P.maxHp, p.hp + 8 + g.P.clearHeal);
+  forEachSeat(() => { const p = G.player; if (p.downed) { p.downed = false; p.rv = 0; p.hp = Math.round(G.P.maxHp * 0.3); p.iframes = 1.5; } else p.hp = Math.min(G.P.maxHp, p.hp + 8 + G.P.clearHeal); });
   sfx('clear', 520, 0.4, 'triangle', 0.07, 2.2);
   g.ebullets.length = 0;
 }
 function winRoot() {
   const g = G; if (state === 'win') return;
-  g.clears++; g.clearTimes.push(g.time - g.loopStart); g.won = true; state = 'win';
+  g.clears++; g.clearTimes.push(g.time - g.loopStart); g.won = true; forEachSeat(() => { state = 'win'; });
   g.items.forEach(it => { if (it.kind === 'credit') it.fly = true; });
 }
 function startLoop() {
   const g = G; if (!g || state !== 'win') return false;
   g.loop++; g.loopStart = g.time; g.plan = buildPlan(); g.hardNext = false; g.over = false; g.won = false; g.perkOffer = null; g.near = null;
-  g.player.hp = g.P.maxHp; g.player.iframes = 1.5;
+  forEachSeat(() => { G.perkOffer = null; G.near = null; const p = G.player; p.downed = false; p.rv = 0; p.hp = G.P.maxHp; p.iframes = 1.5; state = 'play'; });
   if (g.loop > best.bestLoop) best.bestLoop = g.loop;
   saveBest();
   state = 'play'; startRoom(1);
   sfx('perk', 500, 0.3, 'triangle', 0.07, 2);
   return true;
 }
-function endToMenu() { if (!G) return; endRun(true); state = 'menu'; G = null; resize(); }
+function endToMenu() { if (!G) return; if (G.coop) { coopEndRun(); return; } endRun(true); state = 'menu'; G = null; resize(); }
 
 function advanceDoor() { const g = G; if (g.room < STAGES) startRoom(g.room + 1); }
+// per-player part of the room flow in co-op: door + shop terminal / risk altar
+function seatRoomFlow() {
+  const g = G, p = g.player, cx = ARENA.x + ARENA.w / 2;
+  if (g.roomState !== 'clear' || p.downed) return;
+  if (g.doorOpen && state === 'play' && p.y < ARENA.y + 16 && Math.abs(p.x - cx) < 30) g.advance = true;
+  const spot = g.shop || g.risk;
+  if (spot && state === 'play') {
+    const d = Math.hypot(p.x - spot.x, p.y - spot.y);
+    if (spot.ign) { if (d > spot.r + 26) spot.ign = false; }
+    else if (d < spot.r && !(g.risk && g.risk.used)) { if (g.shop) openShop(); else openRisk(); }
+  }
+}
 function updateRoomFlow(dt) {
   const g = G, p = g.player, cur = g.cur, cx = ARENA.x + ARENA.w / 2;
   if (g.roomState === 'fight') {
@@ -522,6 +535,7 @@ function updateRoomFlow(dt) {
   }
   if (g.roomState === 'clear') {
     g.clearT -= dt;
+    if (g.coop) { if (g.clearT <= 0 && !g.doorOpen && !g.perkDone) { g.perkDone = true; g.perkT = 30; forEachSeat(() => offerPerks({ boss: !!cur.boss })); } return; }
     if (g.clearT <= 0 && !g.doorOpen && state === 'play' && !g.perkOffer && !g.perkDone) { g.perkDone = true; offerPerks({ boss: !!cur.boss }); }
     if (g.doorOpen && state === 'play') {
       if (p.y < ARENA.y + 16 && Math.abs(p.x - cx) < 30) { advanceDoor(); return; }
@@ -550,7 +564,8 @@ function setupShop() {
   g.shop = { x: cx, y: ty, r: 34, ign: false, offers };
   if (!(g.banner && g.banner.zone)) g.banner = { text: 'SHOP TERMINAL', sub: 'Walk up to the terminal to spend credits', t: 2.6, col: '#39ff6a' };
 }
-function openShop() { joy.active = false; joy.mx = joy.my = 0; joy.id = null; state = 'shop'; }
+function resetJoy() { if (G && G.coop && G.curSeat && !G.curSeat.local) return; joy.active = false; joy.mx = joy.my = 0; joy.id = null; }
+function openShop() { resetJoy(); state = 'shop'; }
 function leaveShop() { if (state !== 'shop') return; state = 'play'; if (G.shop) G.shop.ign = true; }
 function buyOffer(i) {
   const g = G, s = g.shop; if (!s) return false;
@@ -573,7 +588,7 @@ function setupRisk() {
   g.risk = { x: cx, y: ty, r: 34, ign: false, used: false };
   if (!(g.banner && g.banner.zone)) g.banner = { text: 'RISK ROOM', sub: 'Take power now, face a harder next room', t: 2.6, col: '#ff3b6b' };
 }
-function openRisk() { joy.active = false; joy.mx = joy.my = 0; joy.id = null; state = 'risk'; }
+function openRisk() { resetJoy(); state = 'risk'; }
 function genCursedWeapon() {
   const w = genWeapon(null, Math.random() < 0.35 ? 3 : 2);
   if (w.afx.indexOf('cursed') < 0) w.afx[0] = 'cursed';
@@ -616,14 +631,14 @@ function pickPerks(n, exclude, min, luckBonus) {
 function offerPerks(opts) {
   opts = opts || {};
   const g = G, n = g.P.cls === 'glitch' ? 4 : 3;
-  joy.active = false; joy.mx = joy.my = 0; joy.id = null;
+  resetJoy();
   g.perkMode = opts.mode || 'room'; g.perkMin = opts.min || 0; g.banishMode = false;
   g.perkOffer = pickPerks(n, [], g.perkMin, opts.boss ? 0.5 : 0); state = 'perk';
 }
 function applyPerk(perk) { const g = G; perk.apply(g.P, g); g.perkCount[perk.id] = (g.perkCount[perk.id] || 0) + 1; g.perksTaken.push(perk.id); }
 function finishOffer() {
   const g = G; g.perkOffer = null; g.banishMode = false; state = 'play';
-  if (!g.doorOpen) { g.doorOpen = true; g.banner = { text: 'DOOR OPEN', sub: g.plan[g.room] ? 'Next: ' + (g.plan[g.room].boss ? 'BOSS' : ROOM_KINDS[g.plan[g.room].kind].name) : '', t: 1.6, col: '#19f0ff' }; }
+  if (!g.doorOpen && !g.coop) { g.doorOpen = true; g.banner = { text: 'DOOR OPEN', sub: g.plan[g.room] ? 'Next: ' + (g.plan[g.room].boss ? 'BOSS' : ROOM_KINDS[g.plan[g.room].kind].name) : '', t: 1.6, col: '#19f0ff' }; }
 }
 function takePerk(perk) { applyPerk(perk); sfx('perk', 500, 0.3, 'triangle', 0.07, 2); finishOffer(); }
 function pickOffer(i) { const g = G; if (!g.perkOffer || !g.perkOffer[i]) return; if (g.banishMode) banishCard(i); else takePerk(g.perkOffer[i]); }

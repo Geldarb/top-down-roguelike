@@ -1,0 +1,10 @@
+{
+  "name": "neon-vault-coop-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Neon Vault co-op relay + static host (rooms, lobby, host-authoritative snapshot relay)",
+  "main": "index.js",
+  "scripts": { "start": "node index.js" },
+  "engines": { "node": ">=18" },
+  "dependencies": { "ws": "^8.18.0" }
+}
